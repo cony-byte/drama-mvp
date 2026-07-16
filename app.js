@@ -14,6 +14,7 @@ const $ = (id) => document.getElementById(id);
 
 const views = {
   input: $("inputView"),
+  chat: $("chatView"),
   progress: $("progressView"),
   result: $("resultView"),
   error: $("errorView"),
@@ -22,6 +23,73 @@ const views = {
 function showView(name) {
   for (const v of Object.values(views)) v.classList.add("hidden");
   views[name].classList.remove("hidden");
+}
+
+let sessionId = null;
+
+function addBubble(role, text) {
+  const div = document.createElement("div");
+  div.className = `bubble ${role}`;
+  div.textContent = text;
+  $("chatMessages").appendChild(div);
+  $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
+  return div;
+}
+
+async function startChat() {
+  const idea = $("ideaInput").value.trim();
+  if (!idea) return;
+  const base = getApiBase();
+  $("startChatBtn").disabled = true;
+  try {
+    showView("chat");
+    $("chatMessages").innerHTML = "";
+    addBubble("user", idea);
+    const pending = addBubble("assistant", "…");
+    pending.classList.add("pending");
+    const res = await fetch(`${base}/api/chat/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idea }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    const data = await res.json();
+    sessionId = data.session_id;
+    pending.classList.remove("pending");
+    pending.textContent = data.reply;
+  } catch (e) {
+    $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
+    showView("error");
+  } finally {
+    $("startChatBtn").disabled = false;
+  }
+}
+
+async function sendChatMessage() {
+  const message = $("chatInput").value.trim();
+  if (!message || !sessionId) return;
+  const base = getApiBase();
+  $("chatInput").value = "";
+  $("chatSendBtn").disabled = true;
+  addBubble("user", message);
+  const pending = addBubble("assistant", "…");
+  pending.classList.add("pending");
+  try {
+    const res = await fetch(`${base}/api/chat/${sessionId}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    const data = await res.json();
+    pending.classList.remove("pending");
+    pending.textContent = data.reply;
+  } catch (e) {
+    pending.classList.remove("pending");
+    pending.textContent = `(응답 실패: ${e.message})`;
+  } finally {
+    $("chatSendBtn").disabled = false;
+  }
 }
 
 // #stageList의 data-key가 job.stage 문자열에 포함되면 그 단계까지 진행된 것으로 본다.
@@ -69,17 +137,12 @@ async function pollJob(jobId) {
   }
 }
 
-async function submitIdea() {
-  const idea = $("ideaInput").value.trim();
-  if (!idea) return;
+async function finalizeChat() {
+  if (!sessionId) return;
   const base = getApiBase();
-  $("submitBtn").disabled = true;
+  $("finalizeBtn").disabled = true;
   try {
-    const res = await fetch(`${base}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idea }),
-    });
+    const res = await fetch(`${base}/api/chat/${sessionId}/finalize`, { method: "POST" });
     if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
     const { job_id } = await res.json();
     updateStageList("대기 중");
@@ -90,11 +153,19 @@ async function submitIdea() {
     $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
     showView("error");
   } finally {
-    $("submitBtn").disabled = false;
+    $("finalizeBtn").disabled = false;
   }
 }
 
-$("submitBtn").addEventListener("click", submitIdea);
+$("startChatBtn").addEventListener("click", startChat);
+$("chatSendBtn").addEventListener("click", sendChatMessage);
+$("chatInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendChatMessage();
+  }
+});
+$("finalizeBtn").addEventListener("click", finalizeChat);
 
 $("settingsToggle").addEventListener("click", () => {
   $("settingsPanel").classList.toggle("hidden");
@@ -107,7 +178,9 @@ $("apiBaseSave").addEventListener("click", () => {
 
 function resetToInput() {
   stopPolling();
+  sessionId = null;
   $("ideaInput").value = "";
+  $("chatMessages").innerHTML = "";
   showView("input");
 }
 $("restartBtn").addEventListener("click", resetToInput);

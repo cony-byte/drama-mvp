@@ -20,7 +20,16 @@
 
   <section id="inputView">
     <textarea id="ideaInput" placeholder="예: 재벌 3세 남주가 신분을 숨기고 편의점 아르바이트를 하다 사장 딸과 계약연애를 하게 된다" rows="4"></textarea>
-    <button id="submitBtn" type="button">만들기</button>
+    <button id="startChatBtn" type="button">이야기 시작하기</button>
+  </section>
+
+  <section id="chatView" class="hidden">
+    <div id="chatMessages"></div>
+    <div id="chatInputRow">
+      <textarea id="chatInput" placeholder="답장을 입력하세요" rows="1"></textarea>
+      <button id="chatSendBtn" type="button">보내기</button>
+    </div>
+    <button id="finalizeBtn" type="button">✨ 이걸로 기획 시작하기</button>
   </section>
 
   <section id="progressView" class="hidden">
