@@ -160,6 +160,34 @@ button#finalizeBtn { margin-top: 4px; }
 }
 .option-chip:active { background: var(--accent-dim); }
 
+#pitchView {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+#pitchView h2 { font-size: 18px; text-align: center; margin: 0; }
+#pitchText {
+  background: var(--card);
+  border-radius: 14px;
+  padding: 16px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+button#pitchRestartBtn {
+  width: 100%;
+  padding: 16px;
+  border-radius: 14px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+}
+
 #progressView {
   display: flex;
   flex-direction: column;

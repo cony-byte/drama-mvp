@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from pipeline import chat, jobs
-from pipeline.orchestrator import chat_reply, compose_idea_from_chat, run_full_pipeline
+from pipeline.orchestrator import chat_reply, compose_idea_from_chat, generate_pitch, run_full_pipeline
 
 app = FastAPI()
 app.add_middleware(
@@ -76,11 +76,13 @@ def chat_continue(session_id: str, req: ChatReplyRequest):
 
 @app.post("/api/chat/{session_id}/finalize")
 def chat_finalize(session_id: str):
+    """지금은 기획안까지만 만들어서 바로 보여준다(영상까지 이어지는 전체 파이프라인은 아직 안 붙임)."""
     history = chat.get_history(session_id)
     if history is None:
         raise HTTPException(404, "채팅 세션을 찾을 수 없어요.")
     idea = compose_idea_from_chat(history)
-    return {"job_id": _start_pipeline(idea)}
+    pitch = generate_pitch(idea)
+    return {"pitch": pitch}
 
 
 @app.get("/api/jobs/{job_id}")
