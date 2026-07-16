@@ -15,6 +15,7 @@ const $ = (id) => document.getElementById(id);
 const views = {
   input: $("inputView"),
   chat: $("chatView"),
+  pitch: $("pitchView"),
   progress: $("progressView"),
   result: $("resultView"),
   error: $("errorView"),
@@ -163,17 +164,16 @@ async function pollJob(jobId) {
 }
 
 async function finalizeChat() {
+  // 지금은 기획안까지만 만들고 멈춘다(영상까지 이어지는 전체 파이프라인은 아직 안 붙임).
   if (!sessionId) return;
   const base = getApiBase();
   $("finalizeBtn").disabled = true;
   try {
     const res = await fetch(`${base}/api/chat/${sessionId}/finalize`, { method: "POST" });
     if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
-    const { job_id } = await res.json();
-    updateStageList("대기 중");
-    showView("progress");
-    pollTimer = setInterval(() => pollJob(job_id), 3000);
-    pollJob(job_id);
+    const { pitch } = await res.json();
+    $("pitchText").textContent = pitch;
+    showView("pitch");
   } catch (e) {
     $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
     showView("error");
@@ -210,4 +210,5 @@ function resetToInput() {
   showView("input");
 }
 $("restartBtn").addEventListener("click", resetToInput);
+$("pitchRestartBtn").addEventListener("click", resetToInput);
 $("errorRetryBtn").addEventListener("click", resetToInput);
