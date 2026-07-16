@@ -48,7 +48,10 @@ function renderOptions(options) {
     btn.type = "button";
     btn.className = "option-chip";
     btn.textContent = label;
-    btn.addEventListener("click", () => sendChatMessage(label));
+    btn.addEventListener("click", () => {
+      $("chatInput").value = label;
+      $("chatInput").focus();
+    });
     box.appendChild(btn);
   }
   box.classList.remove("hidden");
@@ -85,9 +88,8 @@ async function startChat() {
   }
 }
 
-// chipLabel이 있으면 입력창 대신 그 텍스트를 즉시 보낸다(탭 한 번으로 전송, "보내기" 없이).
-async function sendChatMessage(chipLabel) {
-  const message = chipLabel || $("chatInput").value.trim();
+async function sendChatMessage() {
+  const message = $("chatInput").value.trim();
   if (!message || !sessionId) return;
   const base = getApiBase();
   $("chatInput").value = "";
