@@ -98,6 +98,34 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
     return path
 
 
+def generate_cuts_for_scene(work: str, scene_num: int, shots: list[dict],
+                            episode: int = 1, on_progress=None) -> list[dict]:
+    """씬의 모든 샷을 순서대로 이미지→영상 생성. 안전필터 등으로 실패한 컷은 그 컷만
+    건너뛰고 나머지를 계속 진행(전체 실패 방지만 목적 — 재시도 고도화는 안 함, MVP 범위).
+    반환: [{"cut_num", "status": "ok"|"failed", "video_path"?, "error"?}, ...]"""
+    results = []
+    for shot in shots:
+        cut_num = shot["n"]
+
+        def notify(msg):
+            if on_progress:
+                on_progress(scene_num, cut_num, msg)
+
+        try:
+            notify("이미지 생성 중")
+            png, _img_cost = generate_image_for_shot(shot)
+            notify("영상화 중")
+            path = generate_video_for_cut(work, scene_num, cut_num, png,
+                                          motion_prompt=shot.get("caption", shot["prompt"]),
+                                          episode=episode)
+            results.append({"cut_num": cut_num, "status": "ok", "video_path": path})
+            notify("완료")
+        except Exception as e:
+            results.append({"cut_num": cut_num, "status": "failed", "error": str(e)})
+            notify(f"실패 — 건너뜀: {e}")
+    return results
+
+
 def run_text_stages(idea: str, episode: int = 1, on_stage=None) -> dict:
     """1~5단계(텍스트만) 실행. on_stage(stage_name)는 단계 전환 시 호출되는 진행 알림 콜백."""
     def notify(stage):
