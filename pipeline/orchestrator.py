@@ -90,6 +90,17 @@ def generate_pitch(idea: str) -> str:
     return _with_retry(cw_generator.complete, cw_prompts.plan_system(idea), user_msg).strip()
 
 
+LOGLINE_SYSTEM = """너는 숏폼 로맨스 드라마 로그라인만 짧게 뽑아주는 카피라이터다.
+주어진 내용을 바탕으로 후킹되는 로그라인을 **한두 문장**으로만 써라. 제목·해시태그·설명·
+목록은 쓰지 말고, 로그라인 문장 그 자체만 출력해라."""
+
+
+def generate_logline(idea: str) -> str:
+    """전체 기획안(등장인물·줄거리·회차분배 등) 대신 로그라인 한두 문장만 먼저 보여줄 때 사용."""
+    user_msg = f"다음 내용을 바탕으로 로그라인만 써줘:\n{idea}"
+    return _with_retry(cw_generator.complete, LOGLINE_SYSTEM, user_msg).strip()
+
+
 def generate_script(idea: str, pitch: str, episode: int = 1) -> str:
     thread_messages = [{"role": "user",
                          "content": f"{pitch}\n\n위 기획안을 바탕으로 {episode}화 대본을 써줘."}]
