@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>드라마 MVP</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>한 줄 아이디어로<br>드라마 숏폼 만들기</h1>
+
+  <section id="settings">
+    <button id="settingsToggle" type="button">⚙️ 서버 주소 설정</button>
+    <div id="settingsPanel" class="hidden">
+      <input id="apiBaseInput" type="text" placeholder="https://xxxx.ngrok-free.app">
+      <button id="apiBaseSave" type="button">저장</button>
+    </div>
+  </section>
+
+  <section id="inputView">
+    <textarea id="ideaInput" placeholder="예: 재벌 3세 남주가 신분을 숨기고 편의점 아르바이트를 하다 사장 딸과 계약연애를 하게 된다" rows="4"></textarea>
+    <button id="submitBtn" type="button">만들기</button>
+  </section>
+
+  <section id="progressView" class="hidden">
+    <div class="spinner"></div>
+    <p id="stageText">대기 중</p>
+    <ul id="stageList">
+      <li data-key="기획안">기획안</li>
+      <li data-key="대본">대본</li>
+      <li data-key="씬 설계">씬 설계</li>
+      <li data-key="콘티">상세 콘티</li>
+      <li data-key="샷 분해">샷 분해</li>
+      <li data-key="영상 제작">이미지·영상 제작</li>
+      <li data-key="합본">합본</li>
+    </ul>
+  </section>
+
+  <section id="resultView" class="hidden">
+    <video id="resultVideo" controls playsinline></video>
+    <button id="restartBtn" type="button">다시 만들기</button>
+  </section>
+
+  <section id="errorView" class="hidden">
+    <p id="errorText"></p>
+    <button id="errorRetryBtn" type="button">다시 시도</button>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

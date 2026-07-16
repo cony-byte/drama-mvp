@@ -12,7 +12,7 @@ import vendor.storyboard.bot.prompts as sb_prompts
 import vendor.storyboard.bot.video_index as video_index
 import vendor.storyboard.bot.vp_store as vp_store
 
-from pipeline import parsing
+from pipeline import jobs, parsing, project_setup
 
 
 def _with_retry(fn, *args, retries: int = 1, **kwargs):
@@ -200,3 +200,38 @@ def run_text_stages(idea: str, episode: int = 1, on_stage=None) -> dict:
         "scenes": scenes,
         "shots_by_scene": shots_by_scene,
     }
+
+
+def run_full_pipeline(idea: str, job_id: str, episode: int = 1) -> None:
+    """1~8단계 전체(기획안~합본)를 실행하며 jobs 스토어에 진행상황을 기록. 백그라운드
+    스레드에서 호출되는 걸 전제로 예외를 삼키고 jobs에 error로 남긴다(서버가 프로세스
+    자체가 죽지 않게)."""
+    work = f"demo-{job_id[:8]}"
+    try:
+        result = run_text_stages(idea, episode=episode,
+                                 on_stage=lambda stage: jobs.update(job_id, stage=stage))
+
+        project_setup.ensure_project(work)
+
+        scenes = result["scenes"]
+        shots_by_scene = result["shots_by_scene"]
+        total_shots = sum(len(shots) for shots in shots_by_scene.values())
+        done_count = 0
+
+        def on_progress(scene_num, cut_num, msg):
+            nonlocal done_count
+            if msg in ("완료",) or msg.startswith("실패"):
+                done_count += 1
+            jobs.update(job_id, stage=f"영상 제작 중 ({done_count}/{total_shots}컷) — 씬{scene_num} 컷{cut_num}: {msg}")
+
+        for scene_num, _hdr, _body in scenes:
+            shots = shots_by_scene.get(scene_num) or []
+            if shots:
+                generate_cuts_for_scene(work, scene_num, shots, episode=episode, on_progress=on_progress)
+
+        jobs.update(job_id, stage="합본 중")
+        draft_path = compile_episode_video(work, idea, scenes, shots_by_scene, episode=episode)
+
+        jobs.update(job_id, status="done", stage="완료", video_path=draft_path)
+    except Exception as e:
+        jobs.update(job_id, status="error", stage="오류", error=str(e))
