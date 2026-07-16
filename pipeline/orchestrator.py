@@ -30,6 +30,26 @@ def _with_retry(fn, *args, retries: int = 1, **kwargs):
     raise last_exc
 
 
+CHAT_SYSTEM = """너는 숏폼 드라마 기획을 같이 구상하는 친근하고 리액션 좋은 파트너다.
+사용자가 던진 아이디어나 답변에 짧게 긍정적으로 반응하고("오 좋은데요!" 같은 톤),
+방향을 구체화할 질문이나 제안을 딱 1개만 던져라. 2~3문장 이내로 짧게, 채팅처럼 답하라
+— 기획안·대본 형식(제목·항목·목록)으로 쓰지 마라. 3~4번 정도 대화가 오갔으면, 이제
+구체적인 기획안을 써볼 만하다고 자연스럽게 제안해라."""
+
+
+def chat_reply(history: list[dict]) -> str:
+    """history: [{"role": "user"|"assistant", "content": str}, ...], 마지막이 사용자 메시지."""
+    lines = [f"[{'사용자' if m['role'] == 'user' else '너'}] {m['content']}" for m in history]
+    convo = "\n".join(lines)
+    return _with_retry(cw_generator.complete, CHAT_SYSTEM, convo).strip()
+
+
+def compose_idea_from_chat(history: list[dict]) -> str:
+    """채팅으로 주고받은 내용을 한 덩어리 컨셉 텍스트로 합쳐 기존 파이프라인의 idea로 사용."""
+    lines = [f"{'사용자' if m['role'] == 'user' else '보조'}: {m['content']}" for m in history]
+    return "다음은 기획 방향을 잡기 위해 나눈 대화다. 이 내용을 종합해 기획안을 써라.\n\n" + "\n".join(lines)
+
+
 def generate_pitch(idea: str) -> str:
     user_msg = f"이 컨셉으로 기획안 초안을 만들어줘:\n{idea}"
     return _with_retry(cw_generator.complete, cw_prompts.plan_system(idea), user_msg).strip()
