@@ -5,7 +5,9 @@ import vendor.cowriter.bot.generator as cw_generator
 import vendor.cowriter.bot.prompts as cw_prompts
 import vendor.storyboard.bot.generator as sb_generator
 import vendor.storyboard.bot.openrouter_image as oi
+import vendor.storyboard.bot.openrouter_video as hf_video
 import vendor.storyboard.bot.prompts as sb_prompts
+import vendor.storyboard.bot.vp_store as vp_store
 
 from pipeline import parsing
 
@@ -75,6 +77,25 @@ def generate_shots_by_scene(scenes: list[tuple[int, str, str]]) -> dict[int, lis
             s["n"] = i
         shots_by_scene[num] = shots
     return shots_by_scene
+
+
+def generate_image_for_shot(shot: dict) -> tuple[bytes, float]:
+    """샷 하나의 스틸컷 생성 → (PNG bytes, cost$). 요소 레지스트리 참조(refs)는 MVP에서
+    스킵(하드 게이트 아님 — 얼굴 일관성은 이번 데모에서 포기)."""
+    return _with_retry(oi.generate, shot["prompt"], aspect_ratio="9:16", refs=[])
+
+
+def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
+                           motion_prompt: str, episode: int = 1) -> str:
+    """스틸컷 1장을 영상화해 로컬 mp4 절대경로를 반환. project_setup.ensure_project(work)를
+    먼저 호출해둬야 vp_store가 프로젝트 디렉토리를 찾을 수 있다."""
+    url, cost = _with_retry(hf_video.generate, png, motion_prompt,
+                            aspect_ratio="9:16", generate_audio=False)
+    path = vp_store.save_video(work, scene_num=scene_num, cut_num=cut_num, url=url,
+                               episode=episode, cost=cost)
+    if not path:
+        raise RuntimeError(f"영상 다운로드/저장 실패 (씬{scene_num} 컷{cut_num})")
+    return path
 
 
 def run_text_stages(idea: str, episode: int = 1, on_stage=None) -> dict:
