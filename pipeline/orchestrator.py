@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """한 줄 아이디어 → 기획안 → 대본 → 씬설계 → 상세콘티 → 샷분해 (1~5단계, 텍스트만).
 이미지·영상·합본(6~8단계)은 나중에 이어붙인다. 모든 LLM/HTTP 호출은 vendor의 기존 함수 재사용."""
+import re
+
 import vendor.cowriter.bot.generator as cw_generator
 import vendor.cowriter.bot.prompts as cw_prompts
 import vendor.storyboard.bot.edit_plan as edit_plan
@@ -41,24 +43,40 @@ CHAT_SYSTEM = """너는 숏폼 드라마 기획을 같이 구상하는 친근하
 
 매 턴마다 아래 순서로 아직 안 정해진 축을 딱 1개만 좁혀라(이미 아이디어/답변에서 드러난 축은
 다시 묻지 말고 그거라고 짚어주기만 하고 다음 축으로 넘어가라):
-1. 서브장르/설정(오피스·사극·학원물·재벌물·아이돌물 등) — 이미 명확하면 스킵. 애매하면 "이거
-   좋아요?" 식 열린 질문 대신, 구체적인 선택지 2~3개를 추천해라(예: "오피스 로맨스로 갈지,
-   아예 사극으로 바꿔볼지 — 어느 쪽이 좋아요?").
-2. 핵심 갈등/훅 — 뭐가 두 사람을 못 만나게 막는지.
-3. 텐션/톤 — 코미디/절절함/다크, 그리고 서스펜스·스릴러 느낌을 얼마나 섞을지(예: "이 갈등, 잔잔한
-   신파로 갈지 스릴러처럼 긴장감 있게 갈지?"). 어느 쪽이든 결말은 로맨스로 수렴한다.
-4. 엔딩 방향 — 해피/새드/열린.
+1. 서브장르/설정(오피스·사극·학원물·재벌물·아이돌물 등) — 이미 명확하면 스킵. 애매하면 구체적인
+   선택지 2~4개를 추천해라.
+2. 핵심 갈등/훅 — 뭐가 두 사람을 못 만나게 막는지 — 선택지로 추천해라.
+3. 텐션/톤 — 코미디/절절함/다크, 서스펜스·스릴러 느낌을 얼마나 섞을지 — 선택지로 추천해라.
+   어느 쪽이든 결말은 로맨스로 수렴한다.
+4. 엔딩 방향 — 해피/새드/열린 — 선택지로 추천해라.
 
-2~3문장 이내로 짧게, 채팅처럼 답하라 — 기획안·대본 형식(제목·항목·목록)으로 쓰지 마라.
+2~3문장 이내로 짧게, 채팅처럼 답하라 — 마크다운(별표·목록 기호) 쓰지 말고 평문으로만.
+기획안·대본 형식(제목·항목)으로 쓰지 마라.
+
+★선택지를 추천할 때마다 반드시 맨 끝에 이 형식의 줄을 한 줄 추가해라(선택지가 없는 열린
+질문일 때는 이 줄 자체를 넣지 마라):
+[선택지: 짧은라벨1 | 짧은라벨2 | 짧은라벨3]
+각 라벨은 2~6글자 내외로 짧게(예: "오피스 로맨스", "사극", "삼각관계"), 앞의 본문 설명과
+겹쳐도 된다 — 사용자가 탭 한 번으로 고를 수 있는 용도다.
+
 3~4번 정도 대화가 오갔으면(위 4가지가 대부분 정해졌으면), 이제 구체적인 기획안을 써볼 만하다고
-자연스럽게 제안해라."""
+자연스럽게 제안해라(이때는 [선택지] 줄 대신 "기획 시작하기 버튼을 눌러주세요" 같은 안내만)."""
+
+_OPTIONS_LINE_RE = re.compile(r"\n?\[선택지:\s*(.+?)\]\s*$")
 
 
-def chat_reply(history: list[dict]) -> str:
-    """history: [{"role": "user"|"assistant", "content": str}, ...], 마지막이 사용자 메시지."""
+def chat_reply(history: list[dict]) -> tuple[str, list[str]]:
+    """history: [{"role": "user"|"assistant", "content": str}, ...], 마지막이 사용자 메시지.
+    반환: (화면에 보여줄 텍스트, 선택지 칩 라벨 목록 — 없으면 빈 리스트)."""
     lines = [f"[{'사용자' if m['role'] == 'user' else '너'}] {m['content']}" for m in history]
     convo = "\n".join(lines)
-    return _with_retry(cw_generator.complete, CHAT_SYSTEM, convo).strip()
+    raw = _with_retry(cw_generator.complete, CHAT_SYSTEM, convo).strip()
+    m = _OPTIONS_LINE_RE.search(raw)
+    if not m:
+        return raw, []
+    options = [o.strip() for o in m.group(1).split("|") if o.strip()]
+    text = raw[:m.start()].strip()
+    return text, options
 
 
 def compose_idea_from_chat(history: list[dict]) -> str:

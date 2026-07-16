@@ -55,9 +55,9 @@ def chat_start(req: ChatStartRequest):
         raise HTTPException(400, "아이디어를 입력해주세요.")
     session_id = chat.create()
     chat.append(session_id, "user", idea)
-    reply = chat_reply(chat.get_history(session_id))
+    reply, options = chat_reply(chat.get_history(session_id))
     chat.append(session_id, "assistant", reply)
-    return {"session_id": session_id, "reply": reply}
+    return {"session_id": session_id, "reply": reply, "options": options}
 
 
 @app.post("/api/chat/{session_id}/reply")
@@ -69,9 +69,9 @@ def chat_continue(session_id: str, req: ChatReplyRequest):
     if not message:
         raise HTTPException(400, "메시지를 입력해주세요.")
     chat.append(session_id, "user", message)
-    reply = chat_reply(chat.get_history(session_id))
+    reply, options = chat_reply(chat.get_history(session_id))
     chat.append(session_id, "assistant", reply)
-    return {"reply": reply}
+    return {"reply": reply, "options": options}
 
 
 @app.post("/api/chat/{session_id}/finalize")

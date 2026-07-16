@@ -143,6 +143,23 @@ button#startChatBtn:disabled, button#finalizeBtn:disabled { background: var(--ac
 }
 button#finalizeBtn { margin-top: 4px; }
 
+#chatOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.option-chip {
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.option-chip:active { background: var(--accent-dim); }
+
 #progressView {
   display: flex;
   flex-direction: column;

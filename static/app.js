@@ -36,6 +36,24 @@ function addBubble(role, text) {
   return div;
 }
 
+function renderOptions(options) {
+  const box = $("chatOptions");
+  box.innerHTML = "";
+  if (!options || !options.length) {
+    box.classList.add("hidden");
+    return;
+  }
+  for (const label of options) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "option-chip";
+    btn.textContent = label;
+    btn.addEventListener("click", () => sendChatMessage(label));
+    box.appendChild(btn);
+  }
+  box.classList.remove("hidden");
+}
+
 async function startChat() {
   const idea = $("ideaInput").value.trim();
   if (!idea) return;
@@ -44,6 +62,7 @@ async function startChat() {
   try {
     showView("chat");
     $("chatMessages").innerHTML = "";
+    renderOptions([]);
     addBubble("user", idea);
     const pending = addBubble("assistant", "…");
     pending.classList.add("pending");
@@ -57,6 +76,7 @@ async function startChat() {
     sessionId = data.session_id;
     pending.classList.remove("pending");
     pending.textContent = data.reply;
+    renderOptions(data.options);
   } catch (e) {
     $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
     showView("error");
@@ -65,12 +85,14 @@ async function startChat() {
   }
 }
 
-async function sendChatMessage() {
-  const message = $("chatInput").value.trim();
+// chipLabel이 있으면 입력창 대신 그 텍스트를 즉시 보낸다(탭 한 번으로 전송, "보내기" 없이).
+async function sendChatMessage(chipLabel) {
+  const message = chipLabel || $("chatInput").value.trim();
   if (!message || !sessionId) return;
   const base = getApiBase();
   $("chatInput").value = "";
   $("chatSendBtn").disabled = true;
+  renderOptions([]);
   addBubble("user", message);
   const pending = addBubble("assistant", "…");
   pending.classList.add("pending");
@@ -84,6 +106,7 @@ async function sendChatMessage() {
     const data = await res.json();
     pending.classList.remove("pending");
     pending.textContent = data.reply;
+    renderOptions(data.options);
   } catch (e) {
     pending.classList.remove("pending");
     pending.textContent = `(응답 실패: ${e.message})`;
@@ -181,6 +204,7 @@ function resetToInput() {
   sessionId = null;
   $("ideaInput").value = "";
   $("chatMessages").innerHTML = "";
+  renderOptions([]);
   showView("input");
 }
 $("restartBtn").addEventListener("click", resetToInput);
