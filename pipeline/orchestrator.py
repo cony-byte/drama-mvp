@@ -3,10 +3,13 @@
 이미지·영상·합본(6~8단계)은 나중에 이어붙인다. 모든 LLM/HTTP 호출은 vendor의 기존 함수 재사용."""
 import vendor.cowriter.bot.generator as cw_generator
 import vendor.cowriter.bot.prompts as cw_prompts
+import vendor.storyboard.bot.edit_plan as edit_plan
+import vendor.storyboard.bot.episode_compile as episode_compile
 import vendor.storyboard.bot.generator as sb_generator
 import vendor.storyboard.bot.openrouter_image as oi
 import vendor.storyboard.bot.openrouter_video as hf_video
 import vendor.storyboard.bot.prompts as sb_prompts
+import vendor.storyboard.bot.video_index as video_index
 import vendor.storyboard.bot.vp_store as vp_store
 
 from pipeline import parsing
@@ -124,6 +127,40 @@ def generate_cuts_for_scene(work: str, scene_num: int, shots: list[dict],
             results.append({"cut_num": cut_num, "status": "failed", "error": str(e)})
             notify(f"실패 — 건너뜀: {e}")
     return results
+
+
+def generate_mood_prompt(idea: str) -> str:
+    """배경음악(Lyria) 프롬프트용 짧은 영어 무드 묘사 한 문장."""
+    system = ("You write ONE short English sentence describing background-music mood/style "
+              "for a short-form romance drama scene, for a text-to-music generator. "
+              "Output only the sentence — no quotes, no extra text.")
+    return _with_retry(sb_generator.complete, system, f"Story concept: {idea}").strip()
+
+
+def attach_narration(plan: list[dict], shots_by_scene: dict[int, list[dict]]) -> list[dict]:
+    """edit_plan.build_edit_plan()의 결과는 narration_text가 항상 None(LLM 편집계획을 안 쓰는
+    러프 플랜이라 애초에 안 채워짐) — 각 컷의 샷 caption을 나레이션 텍스트로 채워 넣는다."""
+    for seg in plan:
+        shots = shots_by_scene.get(seg["scene_num"]) or []
+        shot = next((s for s in shots if s.get("n") == seg["cut_num"]), None)
+        if shot and shot.get("caption"):
+            seg["narration_text"] = shot["caption"]
+            seg["speaker"] = "나레이션"
+    return plan
+
+
+def compile_episode_video(work: str, idea: str, scenes: list[tuple[int, str, str]],
+                          shots_by_scene: dict[int, list[dict]], episode: int = 1,
+                          episode_title: str = "1화") -> str:
+    """지금까지 저장된 영상들을 모아 나레이션·배경음악까지 믹싱한 draft mp4를 만든다."""
+    scene_nums = [num for num, _hdr, _body in scenes]
+    videos_by_scene = video_index.list_episode_videos(work, scene_nums, episode=episode)
+    plan = edit_plan.build_edit_plan(work, episode_title, scenes, videos_by_scene)
+    if not plan:
+        raise RuntimeError("영상화된 컷이 하나도 없어서 합본할 수 없어요.")
+    plan = attach_narration(plan, shots_by_scene)
+    mood_prompt = generate_mood_prompt(idea)
+    return episode_compile.compile_episode(work, episode_title, plan, mood_prompt=mood_prompt)
 
 
 def run_text_stages(idea: str, episode: int = 1, on_stage=None) -> dict:

@@ -289,20 +289,17 @@ def _render(work: str, plan: list[dict], out_path: Path, tmpdir: Path, *,
     _run([config.FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0", "-i", str(filelist),
          "-c", "copy", str(concat_path)], timeout=config.COMPILE_TIMEOUT)
 
-    # ★2026-07-14: "목소리 타이밍이 하나도 안 맞음" 피드백으로 나레이션 믹싱을 잠깐 뺐다 —
-    # _build_narration_track 함수 자체는 남겨뒀으니, 타이밍 어긋나는 원인을 찾아 고친 뒤
-    # 이 rename 대신 다시 그 함수를 불러 믹싱하게 되돌리면 된다. 지금은 나레이션 없이 진행.
-    #
-    # 배경음악(2026-07-15 재작업)은 config.OPENROUTER_MUSIC_ENABLED가 켜져 있을 때만 시도한다
-    # — 기본 OFF라 이 토글을 켜지 않는 한 아래는 항상 no-op이고 결과는 오늘과 동일하다.
+    # drama-mvp: 원본은 타이밍 버그로 나레이션 믹싱을 꺼뒀었는데(2026-07-14), 여기선 데모에
+    # 나레이션이 필요해서 다시 켠다 — narration_text가 있는 구간이 없으면 그냥 None이라 무해함.
     total_duration = sum(seg["duration"] for seg in plan)
+    narration_path = _build_narration_track(work, plan, total_duration, tmpdir)
     music_path = (_build_music_track(mood_prompt, total_duration, tmpdir)
                  if config.OPENROUTER_MUSIC_ENABLED else None)
     # ★2026-07-15: 컷 자체 오디오(cut_audio_path)가 하나도 없으면(과거 무음 컷들만 있는 경우)
     # _build_cut_audio_track가 None을 반환하므로, 오디오가 진짜 하나도 없을 때(나레이션도
     # 꺼져있고 배경음악도 꺼져있을 때)는 기존과 완전히 동일하게 무음 mp4로 진행된다.
     cut_audio_path = _build_cut_audio_track(cut_audio_clips, total_duration, tmpdir)
-    audio_path = _combine_audio_tracks([cut_audio_path, music_path], total_duration, tmpdir)
+    audio_path = _combine_audio_tracks([narration_path, cut_audio_path, music_path], total_duration, tmpdir)
     if audio_path is None:
         concat_path.rename(out_path)
         return
