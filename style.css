@@ -503,10 +503,80 @@ button#addEpisodeBtn {
   gap: 10px;
 }
 #episodeDetailView h3 { font-size: 15px; margin: 10px 0 0; }
+#episodeDetailView h2 { font-size: 18px; margin: 0; }
 .episode-script {
   white-space: pre-wrap;
   font-size: 14px;
   line-height: 1.6;
+}
+.head-btns { display: flex; gap: 4px; }
+#subtitleEditRow { display: flex; flex-direction: column; gap: 8px; }
+#episodeSubtitleInput {
+  width: 100%;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #2a2a33;
+  background: var(--card);
+  color: var(--text);
+  font-size: 15px;
+}
+.roster-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+.modal-content {
+  background: var(--bg);
+  border-radius: 16px;
+  padding: 20px;
+  width: 100%;
+  max-width: 360px;
+  max-height: 80vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.modal-content h3 { margin: 0; font-size: 16px; }
+.modal-hint { color: var(--muted); font-size: 13px; margin: 0; }
+.char-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--card);
+  border-radius: 12px;
+  font-size: 14px;
+}
+.char-picker-row .muted { color: var(--muted); font-size: 12px; }
+.char-picker-row button {
+  padding: 6px 14px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.char-picker-row button.in { background: #402323; }
+button#closeCharPickerBtn {
+  width: 100%;
+  padding: 14px;
+  border-radius: 14px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 4px;
 }
 button#closeEpisodeDetailBtn {
   width: 100%;
