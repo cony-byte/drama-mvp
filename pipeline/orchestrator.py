@@ -2,6 +2,7 @@
 """한 줄 아이디어 → 기획안 → 대본 → 씬설계 → 상세콘티 → 샷분해 (1~5단계, 텍스트만).
 이미지·영상·합본(6~8단계)은 나중에 이어붙인다. 모든 LLM/HTTP 호출은 vendor의 기존 함수 재사용."""
 import concurrent.futures
+import os
 import re
 import threading
 
@@ -369,10 +370,24 @@ def generate_script(idea: str, pitch: str, episode: int = 1,
                        target_episode=episode, kind="대본").strip()
 
 
+# 씬설계·콘티 텍스트 생성 백엔드 스위치.
+#  - 기본(agent): 로컬 claude CLI — 무료지만 호출당 느림(씬설계 오래 걸리는 원인)
+#  - SB_TEXT_BACKEND=openrouter: 이미 이미지·샷분해에 쓰는 OpenRouter(oi.chat)로 같은 프롬프트를
+#    보낸다. OPENROUTER_API_KEY 하나로 전 단계가 처리돼 별도 Anthropic 키가 필요 없고 훨씬 빠르다.
+_TEXT_BACKEND = os.environ.get("SB_TEXT_BACKEND", "").strip().lower()
+
+
+def _sb_complete(system: str, user: str) -> str:
+    """씬설계·콘티용 텍스트 완성 — 백엔드 스위치에 따라 OpenRouter(oi.chat) 또는 agent(sb_generator)."""
+    if _TEXT_BACKEND == "openrouter":
+        return oi.chat(system, user)
+    return sb_generator.complete(system, user)
+
+
 def generate_scene_plan(script: str, episode: int = 1,
                         characters: list[dict] | None = None) -> str:
     return _with_retry(
-        sb_generator.complete,
+        _sb_complete,
         sb_prompts.storyboard_plan_system(bible=characters_bible(characters), target_episode=episode),
         sb_prompts.storyboard_plan_user(script)).strip()
 
@@ -392,7 +407,7 @@ def generate_conti(script: str, plan_text: str, scenes_plan: list[tuple[int, str
             f"반드시 '■ 씬{num} · N초 · 제목' 헤더로 시작해 이 씬의 샷 콘티만 출력하고 다른 씬은 "
             "언급하지 마라. 대본의 사건·행동·대사는 하나도 바꾸지 마라.)"
         )
-        parts.append(_with_retry(sb_generator.complete, sys_prompt, user).strip())
+        parts.append(_with_retry(_sb_complete, sys_prompt, user).strip())
     return "\n\n".join(parts)
 
 
