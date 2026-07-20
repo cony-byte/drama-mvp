@@ -218,11 +218,22 @@ def _characters_bible_for_tone(characters: list[dict] | None) -> dict:
     return chars
 
 
+_CARD_FIELD_LABELS = {
+    "gender": "성별", "age": "나이", "role": "포지션",
+    "line": "핵심대사", "appearance": "외형", "description": "설정·설명",
+}
+
+
 def generate_character_card(name: str, hint: str = "", logline: str = "",
-                            characters: list[dict] | None = None) -> dict:
-    """이름(+선택 힌트)으로 캐릭터 카드 전체를 AI 생성 — 원본 봇의 char_add 프롬프트 재사용.
-    로그라인·기존 인물을 참고로 넘겨 작품 톤/관계에 맞춘다. 반환은 우리 캐릭터 스키마
-    (gender/age/role/line/appearance/description)로 매핑한 dict."""
+                            characters: list[dict] | None = None,
+                            existing: dict | None = None) -> dict:
+    """이름(+선택 힌트)으로 캐릭터 카드를 AI 생성 — 원본 봇의 char_add 프롬프트 재사용.
+    existing에 사용자가 이미 채운 값이 있으면 그 값은 **그대로 유지**하고 비어 있는 칸만 AI가
+    채운다(사용자 요청). 로그라인·기존 인물을 참고로 작품 톤/관계에 맞춘다. 반환은 우리 스키마
+    (gender/age/role/line/appearance/description)."""
+    existing = {k: (v or "").strip() for k, v in (existing or {}).items()}
+    filled = {k: v for k, v in existing.items() if v}
+
     bible = {}
     if logline:
         bible["logline"] = logline
@@ -230,14 +241,24 @@ def generate_character_card(name: str, hint: str = "", logline: str = "",
     if tone_chars:
         bible["characters"] = tone_chars
     system = cw_prompts.char_add_system(bible or None)
-    user = cw_prompts.char_add_user(name or "새 인물",
-                                    hint or "이 작품 톤에 어울리는 인물로 자유롭게 만들어줘")
-    raw = _with_retry(cw_generator.complete, system, user)
-    data = parsing.parse_json_object(raw)
-    # char_add는 "설정"(배경·특징)과 "설명"(서사 기능·관계)을 따로 내는데, 우리 스키마엔
-    # description 하나뿐이라 둘을 합쳐 넣는다.
+
+    # 사용자가 이미 채운 칸을 "확정 정보"로 프롬프트에 못박아, AI가 그와 모순되지 않게 나머지를 채우게 한다.
+    req_parts = [hint] if hint else []
+    if filled:
+        locked = "\n".join(f"- {_CARD_FIELD_LABELS.get(k, k)}: {v}" for k, v in filled.items())
+        req_parts.append(
+            "아래는 작가가 이미 확정한 정보다 — 이 값들과 모순되지 않게, 이 설정에 맞춰 "
+            f"나머지 항목을 채워라(확정 항목은 바꾸지 마라):\n{locked}")
+    request_text = "\n".join(req_parts) or "이 작품 톤에 어울리는 인물로 자유롭게 만들어줘"
+    user = cw_prompts.char_add_user(name or "새 인물", request_text)
+
+    def _once():
+        raw = cw_generator.complete(system, user)
+        return parsing.parse_json_object(raw)  # 실패 시 ValueError → _with_retry가 한 번 더
+
+    data = _with_retry(_once)
     desc = " ".join(x for x in [data.get("설정", ""), data.get("설명", "")] if x).strip()
-    return {
+    ai = {
         "gender": (data.get("성별") or "").strip(),
         "age": str(data.get("나이") or "").strip(),
         "role": (data.get("포지션") or "").strip(),
@@ -245,6 +266,8 @@ def generate_character_card(name: str, hint: str = "", logline: str = "",
         "appearance": (data.get("외형") or "").strip(),
         "description": desc,
     }
+    # 사용자가 채운 칸은 그대로 두고, 빈 칸만 AI 값으로 채운다.
+    return {k: (existing.get(k) or ai.get(k, "")) for k in ai}
 
 
 def generate_key_scene_image(situation: str, character_images: list[str] | None = None) -> bytes:

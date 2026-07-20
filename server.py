@@ -201,20 +201,33 @@ def studio_add_character(project_id: str, req: CharacterCreateRequest):
 class CharacterGenerateRequest(BaseModel):
     name: str = ""
     hint: str = ""
+    # 사용자가 이미 채운 값 — 채워진 칸은 유지하고 빈 칸만 AI가 생성
+    gender: str = ""
+    age: str = ""
+    role: str = ""
+    line: str = ""
+    appearance: str = ""
+    description: str = ""
 
 
 @app.post("/api/studio/{project_id}/characters/generate")
 def studio_generate_character(project_id: str, req: CharacterGenerateRequest):
-    """이름(+선택 힌트)으로 캐릭터 카드 필드를 AI 생성. 저장은 안 하고 생성 결과만 반환 —
-    프론트가 상세 화면 입력칸을 채우고, 사용자가 검토 후 직접 저장한다. 작품 로그라인·기존
-    인물을 참고로 톤을 맞춘다."""
+    """이름(+선택 힌트)으로 캐릭터 카드 필드를 AI 생성. 이미 채운 칸은 그대로 두고 빈 칸만
+    채운다. 저장은 안 하고 결과만 반환 — 프론트가 입력칸을 채우고 사용자가 검토 후 저장."""
     project = studio.get_project(project_id)
     if not project:
         raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
-    fields = generate_character_card(
-        req.name, hint=req.hint, logline=project.get("logline", ""),
-        characters=project.get("characters", []),
-    )
+    existing = {k: getattr(req, k) for k in
+                ("gender", "age", "role", "line", "appearance", "description")}
+    try:
+        fields = generate_character_card(
+            req.name, hint=req.hint, logline=project.get("logline", ""),
+            characters=project.get("characters", []), existing=existing,
+        )
+    except Exception as e:
+        # 원시 500은 CORS 헤더가 안 붙어 브라우저에 "Failed to fetch"로만 보임 —
+        # 명시적 HTTPException으로 감싸 CORS 미들웨어를 타고 제대로 된 에러 메시지가 가게 한다.
+        raise HTTPException(502, f"AI 생성에 실패했어요. 잠시 후 다시 시도해주세요. ({e})")
     return fields
 
 
