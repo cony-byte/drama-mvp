@@ -16,6 +16,7 @@ const views = {
   input: $("inputView"),
   chat: $("chatView"),
   pitch: $("pitchView"),
+  videoPrep: $("videoPrepView"),
   progress: $("progressView"),
   result: $("resultView"),
   error: $("errorView"),
@@ -328,10 +329,17 @@ $("regenPitchBtn").addEventListener("click", regeneratePitch);
 // 장르·기획 자체를 바꾸고 싶을 때 — 채팅 이력은 그대로 두고 화면만 되돌아간다.
 $("backToChatBtn").addEventListener("click", () => showView("chat"));
 
-// 다음 단계(대본~영상 생성으로 이어지는 흐름)는 아직 미정 — 자리만 마련.
+// 온보딩의 마지막 지점: 확정된 임팩트 장면 컷을 "영상으로 만들 준비" 화면으로 넘김.
+// 실제 영상 생성 API는 아직 연결 안 함(다음 개발 단계 — 요소 레지스트리로 얼굴 고정한
+// 뒤 컷별 영상화로 이어가는 프로덕션 파이프라인은 별도로 설계됨).
 $("nextStageBtn").addEventListener("click", () => {
-  alert("다음 단계는 아직 준비 중이에요!");
+  const image = currentCard?.key_scene?.image;
+  $("videoPrepImage").src = image || "";
+  $("videoPrepImage").classList.toggle("hidden", !image);
+  showView("videoPrep");
 });
+
+$("videoPrepBackBtn").addEventListener("click", () => showView("pitch"));
 
 $("startChatBtn").addEventListener("click", startChat);
 $("chatSendBtn").addEventListener("click", sendChatMessage);
