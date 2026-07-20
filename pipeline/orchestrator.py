@@ -101,16 +101,24 @@ def generate_logline(idea: str) -> str:
     return _with_retry(cw_generator.complete, LOGLINE_SYSTEM, user_msg).strip()
 
 
-PITCH_CARD_SYSTEM = """너는 숏폼 로맨스 드라마 카피라이터다. 주어진 내용을 바탕으로 로그라인과
-두 주인공(남녀 주인공, 정확히 2명) 정보를 JSON 객체 하나로만 출력해라 — 설명·코드펜스 없이
-JSON만.
+PITCH_CARD_SYSTEM = """너는 숏폼 로맨스 드라마 카피라이터다. 주어진 내용을 바탕으로 로그라인,
+두 주인공(남녀 주인공, 정확히 2명), 그리고 1화에 나올 법한 임팩트 있는 한 장면을 JSON 객체
+하나로만 출력해라 — 설명·코드펜스 없이 JSON만.
 
 형식:
 {"logline": "한두 문장 로그라인",
  "characters": [
    {"name": "이름", "role": "성별/신분 등 짧은 설정(예: '여 · 재벌가 2세')", "line": "그 인물의 핵심 대사 한 줄"},
    {"name": "이름", "role": "...", "line": "..."}
- ]}"""
+ ],
+ "key_scene": {
+   "situation": "그 장면 상황을 영어로 1~2문장 — 이미지 생성 프롬프트에 그대로 쓰이니 등장인물
+     구도(예: two-shot, medium wide)·장소·분위기·표정/동작을 구체적으로",
+   "lines": ["대사 또는 지문 1", "대사 또는 지문 2", "대사 또는 지문 3", "(선택) 대사 4"]
+ }}
+
+key_scene은 1화 안에서 가장 훅이 되는 순간(정체 발각 직전, 첫 만남의 결정적 장면 등) 하나를
+골라라. lines는 실제 대본처럼 3~4줄, 인물 이름을 대사 앞에 붙여라(예: "유준: 대사")."""
 
 
 def generate_pitch_card(idea: str) -> dict:
@@ -146,6 +154,13 @@ def generate_character_portrait(character: dict) -> bytes:
         f"{PORTRAIT_STYLE}"
     )
     png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="2:3", refs=[])
+    return png
+
+
+def generate_key_scene_image(situation: str) -> bytes:
+    """기획 카드의 "1화 임팩트 장면" 미리보기 이미지 1장(PNG bytes)."""
+    prompt = f"Semi-realistic cinematic still, vertical 9:16 framing. Scene: {situation} {PORTRAIT_STYLE}"
+    png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="9:16", refs=[])
     return png
 
 

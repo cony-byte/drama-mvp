@@ -13,8 +13,8 @@ from pydantic import BaseModel
 
 from pipeline import chat, jobs
 from pipeline.orchestrator import (
-    chat_reply, compose_idea_from_chat, generate_character_portrait, generate_pitch_card,
-    run_full_pipeline,
+    chat_reply, compose_idea_from_chat, generate_character_portrait, generate_key_scene_image,
+    generate_pitch_card, run_full_pipeline,
 )
 
 app = FastAPI()
@@ -101,6 +101,17 @@ def portrait(req: PortraitRequest):
     """인물 1명의 초상 이미지를 만들어 base64 data URL로 반환. 세션과 무관한 stateless
     엔드포인트 — 카드 화면에서 인물별로 각각 비동기 호출한다."""
     png = generate_character_portrait({"name": req.name, "role": req.role})
+    return {"image": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}
+
+
+class SceneImageRequest(BaseModel):
+    situation: str
+
+
+@app.post("/api/scene-image")
+def scene_image(req: SceneImageRequest):
+    """1화 임팩트 장면 미리보기 이미지. portrait와 동일하게 stateless·비동기 호출용."""
+    png = generate_key_scene_image(req.situation)
     return {"image": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}
 
 
