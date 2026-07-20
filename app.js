@@ -17,6 +17,7 @@ const views = {
   chat: $("chatView"),
   pitch: $("pitchView"),
   videoPrep: $("videoPrepView"),
+  studio: $("studioView"),
   progress: $("progressView"),
   result: $("resultView"),
   error: $("errorView"),
@@ -340,6 +341,79 @@ $("nextStageBtn").addEventListener("click", () => {
 });
 
 $("videoPrepBackBtn").addEventListener("click", () => showView("pitch"));
+
+let studioProjectId = null;
+
+function renderStudio(project) {
+  $("studioLogline").textContent = project.logline;
+
+  const roster = $("studioRoster");
+  roster.innerHTML = "";
+  for (const ch of project.characters || []) {
+    const div = document.createElement("div");
+    div.className = "roster-item";
+    const img = ch.image ? `<img src="${ch.image}" alt="${ch.name}">` : "";
+    div.innerHTML = `${img}<div class="roster-name">${ch.name}</div>`;
+    roster.appendChild(div);
+  }
+
+  const episodesBox = $("studioEpisodes");
+  episodesBox.innerHTML = "";
+  for (const ep of project.episodes || []) {
+    const div = document.createElement("div");
+    div.className = "episode-card";
+    div.innerHTML = `
+      <div>
+        <div class="episode-title">${ep.num}화</div>
+        <div class="episode-stage">${ep.stage}</div>
+      </div>
+      <button type="button" data-num="${ep.num}">다음 단계</button>
+    `;
+    episodesBox.appendChild(div);
+  }
+}
+
+async function loadStudio(projectId) {
+  const base = getApiBase();
+  const res = await fetch(`${base}/api/studio/${projectId}`);
+  if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+  renderStudio(await res.json());
+}
+
+$("goToStudioBtn").addEventListener("click", async () => {
+  if (!currentCard) return;
+  $("goToStudioBtn").disabled = true;
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/studio/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        idea: currentCard.idea || currentCard.logline,
+        logline: currentCard.logline,
+        characters: currentCard.characters || [],
+        key_scene: currentCard.key_scene || null,
+      }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    const { project_id } = await res.json();
+    studioProjectId = project_id;
+    await loadStudio(project_id);
+    showView("studio");
+  } catch (e) {
+    $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
+    showView("error");
+  } finally {
+    $("goToStudioBtn").disabled = false;
+  }
+});
+
+$("addEpisodeBtn").addEventListener("click", async () => {
+  if (!studioProjectId) return;
+  const base = getApiBase();
+  await fetch(`${base}/api/studio/${studioProjectId}/episodes`, { method: "POST" });
+  await loadStudio(studioProjectId);
+});
 
 $("startChatBtn").addEventListener("click", startChat);
 $("chatSendBtn").addEventListener("click", sendChatMessage);

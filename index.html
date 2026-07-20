@@ -58,8 +58,20 @@
   <section id="videoPrepView" class="hidden">
     <h2>영상 만들기</h2>
     <img id="videoPrepImage" class="key-scene-photo" alt="1화 임팩트 장면">
-    <p id="videoPrepText">이 장면을 영상으로 만들 준비가 됐어요.<br>실제 영상 생성은 다음 개발 단계에서 연결됩니다.</p>
+    <p id="videoPrepText">이 장면을 영상으로 만들 준비가 됐어요.</p>
+    <button id="goToStudioBtn" type="button">🎬 스튜디오로 이동</button>
     <button id="videoPrepBackBtn" type="button">↩️ 돌아가기</button>
+  </section>
+
+  <section id="studioView" class="hidden">
+    <h2 id="studioLogline" class="pitch-block"></h2>
+
+    <h3>캐릭터</h3>
+    <div id="studioRoster" class="studio-roster"></div>
+
+    <h3>화 목록</h3>
+    <div id="studioEpisodes" class="studio-episodes"></div>
+    <button id="addEpisodeBtn" type="button">+ 새 화</button>
   </section>
 
   <section id="progressView" class="hidden">
