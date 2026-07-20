@@ -970,6 +970,26 @@ $("skipToStudioBtn").addEventListener("click", async () => {
   }
 });
 
+$("seedDemoBtn").addEventListener("click", async () => {
+  // 테스트 편의 — 로그라인·줄거리·캐릭터 2명·1화(대본)까지 채워진 더미 프로젝트를 즉시 연다.
+  const btn = $("seedDemoBtn");
+  btn.disabled = true;
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/studio/seed`, { method: "POST" });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    const { project_id } = await res.json();
+    studioProjectId = project_id;
+    await loadStudio(project_id);
+    showView("studio");
+  } catch (e) {
+    $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
+    showView("error");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $("addEpisodeBtn").addEventListener("click", async () => {
   if (!studioProjectId) return;
   const base = getApiBase();

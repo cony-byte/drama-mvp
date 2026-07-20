@@ -158,6 +158,13 @@ def studio_create(req: StudioCreateRequest):
     return {"project_id": project_id}
 
 
+@app.post("/api/studio/seed")
+def studio_seed():
+    """테스트용 더미 프로젝트를 즉시 만들어 project_id를 반환(AI 호출 없음). 매번 캐릭터·대본을
+    새로 채우는 수고 없이 바로 스튜디오를 열어보기 위한 개발 편의 기능."""
+    return {"project_id": studio.seed_demo_project()}
+
+
 @app.get("/api/studio/{project_id}")
 def studio_get(project_id: str):
     project = studio.get_project(project_id)
