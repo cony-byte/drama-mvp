@@ -346,6 +346,7 @@ let studioProjectId = null;
 
 function renderStudio(project) {
   $("studioLogline").textContent = project.logline;
+  $("studioSynopsis").textContent = project.synopsis || "";
 
   const roster = $("studioRoster");
   roster.innerHTML = "";
