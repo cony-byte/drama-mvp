@@ -73,10 +73,13 @@ def create_project(idea: str, card: dict) -> str:
             pass  # 참조 등록 실패해도 프로젝트 생성 자체는 막지 않음(그 캐릭터만 얼굴 불일치 리스크)
 
     logline = card.get("logline", "")
-    try:
-        synopsis = generate_synopsis(idea, logline, characters)
-    except Exception:
-        synopsis = ""  # 실패해도 프로젝트 생성 자체는 막지 않음 — 화면에서 빈 상태로 보임
+    if not idea and not logline and not characters:
+        synopsis = ""  # 온보딩 건너뛰고 만든 빈 프로젝트 — 채울 내용이 없으니 LLM 호출 자체를 스킵
+    else:
+        try:
+            synopsis = generate_synopsis(idea, logline, characters)
+        except Exception:
+            synopsis = ""  # 실패해도 프로젝트 생성 자체는 막지 않음 — 화면에서 빈 상태로 보임
 
     with _LOCK:
         _PROJECTS[project_id] = {
