@@ -83,7 +83,7 @@ button#startChatBtn, button#restartBtn, button#errorRetryBtn, button#finalizeBtn
 }
 button#startChatBtn:disabled, button#finalizeBtn:disabled { background: var(--accent-dim); }
 
-button#skipToStudioBtn {
+button#skipToStudioBtn, button#seedDemoBtn {
   width: 100%;
   padding: 12px;
   margin-top: 8px;
