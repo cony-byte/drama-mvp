@@ -187,6 +187,8 @@ def studio_advance_episode(project_id: str, num: int):
         studio.update_episode(project_id, num, plan_text=plan_text, scenes_plan=scenes_plan,
                              stage="씬설계 완료")
     elif stage == "씬설계 완료":
+        # "콘티"(상세 스토리보드)는 GPT 이미지 생성용 내부 산출물이라 사용자에게 별도 단계로
+        # 안 보여준다 — 씬설계 완료에서 곧장 샷분해 완료까지 이 한 번의 호출 안에서 처리한다.
         conti_full = generate_conti(episode["script"], episode["plan_text"],
                                     episode["scenes_plan"], episode=num)
         scenes = parsing.split_scenes(conti_full)
@@ -195,13 +197,10 @@ def studio_advance_episode(project_id: str, num: int):
         try:
             extract_and_register_elements(project["work"], conti_full)
         except Exception:
-            pass  # 장소·소품·의상 자동 등록 실패해도 콘티 완료 자체는 막지 않음(그만큼 일관성 리스크)
+            pass  # 장소·소품·의상 자동 등록 실패해도 진행 자체는 막지 않음(그만큼 일관성 리스크)
+        shots_by_scene = generate_shots_by_scene(scenes, work=project["work"])
         studio.update_episode(project_id, num, conti_full=conti_full, scenes=scenes,
-                             stage="콘티 완료")
-    elif stage == "콘티 완료":
-        shots_by_scene = generate_shots_by_scene(episode["scenes"], work=project["work"])
-        studio.update_episode(project_id, num, shots_by_scene=shots_by_scene,
-                             stage="샷분해 완료")
+                             shots_by_scene=shots_by_scene, stage="샷분해 완료")
     else:
         raise HTTPException(501, f"'{stage}' 다음 단계는 아직 준비 중이에요.")
 

@@ -16,9 +16,12 @@ _LOCK = threading.Lock()
 _PROJECTS: dict[str, dict] = {}
 
 STAGE_ORDER = [
-    "대본 대기", "대본 완료", "씬설계 완료", "콘티 완료",
+    "대본 대기", "대본 완료", "씬설계 완료",
     "샷분해 완료", "이미지 완료", "영상화 완료", "합본 완료",
 ]
+# ★"콘티"(상세 스토리보드, GPT 이미지 생성용 내부 산출물)는 사용자에게 보일 개념이 아니라서
+# STAGE_ORDER에서 뺐다 — server.py의 advance는 씬설계 완료 → 샷분해 완료로 그 안에서
+# 콘티 생성까지 한 번에 처리하고, conti_full/scenes는 내부적으로만 episode dict에 저장한다.
 
 
 def _safe_filename(name: str) -> str:

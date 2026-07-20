@@ -357,7 +357,6 @@ def run_text_stages(idea: str, episode: int = 1, on_stage=None) -> dict:
     if not scenes_plan:
         raise RuntimeError("씬 설계안에서 씬 목록을 파싱하지 못했어요 — 출력 형식이 예상과 달라요.")
 
-    notify("상세 콘티 작성 중")
     conti_full = generate_conti(script, plan_text, scenes_plan, episode=episode)
     scenes = parsing.split_scenes(conti_full)
     if not scenes:
