@@ -84,10 +84,28 @@
 
     <label>이름</label>
     <input id="charNameInput" type="text">
-    <label>역할/설정</label>
-    <input id="charRoleInput" type="text">
+    <div class="char-row">
+      <div>
+        <label>성별</label>
+        <select id="charGenderInput">
+          <option value="">선택 안 함</option>
+          <option value="남">남</option>
+          <option value="여">여</option>
+        </select>
+      </div>
+      <div>
+        <label>나이</label>
+        <input id="charAgeInput" type="text" placeholder="예: 28">
+      </div>
+    </div>
+    <label>포지션</label>
+    <input id="charRoleInput" type="text" placeholder="예: 재벌 3세">
     <label>핵심 대사</label>
     <textarea id="charLineInput" rows="2"></textarea>
+    <label>외형</label>
+    <textarea id="charAppearanceInput" rows="2" placeholder="예: 큰 키, 짧은 흑발, 날카로운 눈매"></textarea>
+    <label>설명</label>
+    <textarea id="charDescriptionInput" rows="3" placeholder="성격·배경 등 자유 서술"></textarea>
 
     <div class="pitch-actions">
       <button id="saveCharacterBtn" type="button">✅ 저장</button>
