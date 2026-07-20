@@ -83,6 +83,17 @@ button#startChatBtn, button#restartBtn, button#errorRetryBtn, button#finalizeBtn
 }
 button#startChatBtn:disabled, button#finalizeBtn:disabled { background: var(--accent-dim); }
 
+button#skipToStudioBtn {
+  width: 100%;
+  padding: 12px;
+  margin-top: 8px;
+  border-radius: 14px;
+  border: 1px dashed #444;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 #chatView {
   display: flex;
   flex-direction: column;

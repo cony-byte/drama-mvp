@@ -602,6 +602,31 @@ $("goToStudioBtn").addEventListener("click", async () => {
   }
 });
 
+$("skipToStudioBtn").addEventListener("click", async () => {
+  // 온보딩(채팅→기획안→영상 준비) 전체를 건너뛰고 빈 스튜디오 프로젝트를 바로 만든다 —
+  // 로그라인·캐릭터는 스튜디오 화면에서 "+ 캐릭터 추가"·화 상세 등으로 직접 채우면 된다.
+  const btn = $("skipToStudioBtn");
+  btn.disabled = true;
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/studio/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idea: "", logline: "", characters: [], key_scene: null }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    const { project_id } = await res.json();
+    studioProjectId = project_id;
+    await loadStudio(project_id);
+    showView("studio");
+  } catch (e) {
+    $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
+    showView("error");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $("addEpisodeBtn").addEventListener("click", async () => {
   if (!studioProjectId) return;
   const base = getApiBase();
