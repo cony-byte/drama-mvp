@@ -786,16 +786,26 @@ $("genCharacterBtn").addEventListener("click", async () => {
   btn.textContent = "생성 중…";
   try {
     const base = getApiBase();
-    // 이미 적어둔 설명이 있으면 힌트로 같이 넘겨 방향을 준다
-    const hint = $("charDescriptionInput").value.trim();
+    // 이미 채운 칸은 그대로 유지되고 빈 칸만 AI가 채운다 — 현재 입력값을 전부 함께 보낸다.
     const res = await fetch(`${base}/api/studio/${studioProjectId}/characters/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, hint }),
+      body: JSON.stringify({
+        name,
+        gender: $("charGenderInput").value,
+        age: $("charAgeInput").value.trim(),
+        role: $("charRoleInput").value.trim(),
+        line: $("charLineInput").value.trim(),
+        appearance: $("charAppearanceInput").value.trim(),
+        description: $("charDescriptionInput").value.trim(),
+      }),
     });
-    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+    }
     const f = await res.json();
-    // 생성 결과로 입력칸을 채운다(자동 저장 X — 사용자가 검토 후 "저장")
+    // 생성 결과로 입력칸을 채운다(채워둔 칸은 서버가 그대로 돌려줌). 자동 저장 X — 검토 후 "저장"
     $("charGenderInput").value = f.gender || "";
     $("charAgeInput").value = f.age || "";
     $("charRoleInput").value = f.role || "";
