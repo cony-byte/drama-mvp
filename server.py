@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from pipeline import chat, jobs
+from pipeline import chat, jobs, studio
 from pipeline.orchestrator import (
     chat_reply, compose_idea_from_chat, generate_character_portrait, generate_key_scene_image,
     generate_pitch_card, run_full_pipeline,
@@ -113,6 +113,58 @@ def scene_image(req: SceneImageRequest):
     """1화 임팩트 장면 미리보기 이미지. portrait와 동일하게 stateless·비동기 호출용."""
     png = generate_key_scene_image(req.situation)
     return {"image": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}
+
+
+class CharacterModel(BaseModel):
+    name: str
+    role: str = ""
+    line: str = ""
+    image: str | None = None
+
+
+class KeySceneModel(BaseModel):
+    situation: str = ""
+    lines: list[str] = []
+    image: str | None = None
+
+
+class StudioCreateRequest(BaseModel):
+    idea: str
+    logline: str
+    characters: list[CharacterModel]
+    key_scene: KeySceneModel | None = None
+
+
+@app.post("/api/studio/create")
+def studio_create(req: StudioCreateRequest):
+    """온보딩 카드로 스튜디오 프로젝트를 만든다 — 1화가 빈 상태로 자동 생성되고,
+    캐릭터 사진은 요소 레지스트리(얼굴 참조)로 등록된다(pipeline/studio.py 참고)."""
+    card = req.model_dump()
+    idea = card.pop("idea")
+    project_id = studio.create_project(idea, card)
+    return {"project_id": project_id}
+
+
+@app.get("/api/studio/{project_id}")
+def studio_get(project_id: str):
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    return project
+
+
+@app.post("/api/studio/{project_id}/episodes")
+def studio_add_episode(project_id: str):
+    ep = studio.add_episode(project_id)
+    if ep is None:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    return ep
+
+
+@app.post("/api/studio/{project_id}/episodes/{num}/advance")
+def studio_advance_episode(project_id: str, num: int):
+    """다음 단계(대본→씬설계→콘티→...) 진행 — 이번 빌드 범위 밖, 다음 단계에서 연결."""
+    raise HTTPException(501, "다음 단계 연결은 곧 추가돼요.")
 
 
 @app.get("/api/jobs/{job_id}")

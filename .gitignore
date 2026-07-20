@@ -4,5 +4,6 @@ __pycache__/
 .env
 vendor/storyboard/data/projects/*
 !vendor/storyboard/data/projects/.gitkeep
+vendor/storyboard/data/refs/
 *.mp4
 *.png

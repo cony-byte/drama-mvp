@@ -322,6 +322,81 @@ button#videoPrepBackBtn {
   font-weight: 600;
 }
 
+button#goToStudioBtn {
+  width: 100%;
+  padding: 16px;
+  border-radius: 14px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+#studioView {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#studioView h3 { font-size: 15px; margin: 10px 0 0; }
+#studioLogline { font-size: 14px; }
+
+.studio-roster {
+  display: flex;
+  gap: 10px;
+}
+.studio-roster .roster-item {
+  flex: 1;
+  background: var(--card);
+  border-radius: 12px;
+  padding: 8px;
+  text-align: center;
+}
+.studio-roster img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 50%;
+}
+.studio-roster .roster-name { font-size: 12px; margin-top: 4px; }
+
+.studio-episodes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.episode-card {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.episode-card .episode-title { font-weight: 700; font-size: 14px; }
+.episode-card .episode-stage {
+  color: var(--muted);
+  font-size: 12px;
+}
+.episode-card button {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent-dim);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+button#addEpisodeBtn {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px dashed #444;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 #progressView {
   display: flex;
   flex-direction: column;
