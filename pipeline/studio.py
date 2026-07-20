@@ -10,6 +10,7 @@ import uuid
 import vendor.storyboard.bot.openrouter_image as oi
 
 from pipeline import project_setup
+from pipeline.orchestrator import generate_synopsis
 
 _LOCK = threading.Lock()
 _PROJECTS: dict[str, dict] = {}
@@ -54,11 +55,18 @@ def create_project(idea: str, card: dict) -> str:
         except Exception:
             pass  # 참조 등록 실패해도 프로젝트 생성 자체는 막지 않음(그 캐릭터만 얼굴 불일치 리스크)
 
+    logline = card.get("logline", "")
+    try:
+        synopsis = generate_synopsis(idea, logline, characters)
+    except Exception:
+        synopsis = ""  # 실패해도 프로젝트 생성 자체는 막지 않음 — 화면에서 빈 상태로 보임
+
     with _LOCK:
         _PROJECTS[project_id] = {
             "work": work,
             "idea": idea,
-            "logline": card.get("logline", ""),
+            "logline": logline,
+            "synopsis": synopsis,
             "characters": characters,
             "key_scene": card.get("key_scene"),
             "episodes": [_new_episode(1)],

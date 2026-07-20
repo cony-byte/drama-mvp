@@ -130,6 +130,21 @@ def generate_pitch_card(idea: str) -> dict:
     return _with_retry(_once)
 
 
+SYNOPSIS_SYSTEM = """너는 숏폼 로맨스 드라마 작가다. 주어진 로그라인·등장인물을 바탕으로
+전체 줄거리(시놉시스)를 3~5문단으로 써라 — 처음(발단)부터 끝(결말)까지 이야기 전체 흐름을
+요약한다: 어떻게 만나는지, 중간에 어떤 갈등·반전이 있는지, 위기가 어떻게 최고조에 달하는지,
+결말이 어떻게 나는지까지. 등장인물 이름은 주어진 그대로 써라. 회차 구성표나 항목 목록이
+아니라 이야기를 서술하는 문단 형태로, 제목·헤더 없이 본문만 출력해라."""
+
+
+def generate_synopsis(idea: str, logline: str, characters: list[dict]) -> str:
+    """스튜디오의 "전체 줄거리" — 개별 화 대본과 달리 작품 전체를 관통하는 이야기 흐름.
+    이후 화별 대본 생성 시 바이블처럼 참고할 수 있는 기준점이 된다."""
+    names = ", ".join(f"{c.get('name')}({c.get('role')})" for c in characters)
+    user_msg = f"아이디어: {idea}\n로그라인: {logline}\n등장인물: {names}\n\n전체 줄거리를 써줘."
+    return _with_retry(cw_generator.complete, SYNOPSIS_SYSTEM, user_msg).strip()
+
+
 # storyboard-bot/app.py의 STILL_STYLE·_IDEALIZED_FACE_GUIDANCE(원본은 55~60% 리얼리즘 지정)를
 # 가져오되, 사용자 요청으로 리얼리즘 비율만 80%로 올림 — 그 외 "실존 인물처럼 안 보이게",
 # "사진이 아니라 스타일화된 일러스트" 지침은 그대로 유지.
