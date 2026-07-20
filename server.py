@@ -154,6 +154,44 @@ def studio_get(project_id: str):
     return project
 
 
+class CharacterCreateRequest(BaseModel):
+    name: str
+    role: str = ""
+    line: str = ""
+    image: str | None = None
+
+
+@app.post("/api/studio/{project_id}/characters")
+def studio_add_character(project_id: str, req: CharacterCreateRequest):
+    ch = studio.add_character(project_id, req.model_dump())
+    if ch is None:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    return ch
+
+
+class CharacterUpdateRequest(BaseModel):
+    name: str | None = None
+    role: str | None = None
+    line: str | None = None
+    image: str | None = None
+
+
+@app.patch("/api/studio/{project_id}/characters/{char_id}")
+def studio_update_character(project_id: str, char_id: str, req: CharacterUpdateRequest):
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    ch = studio.update_character(project_id, char_id, **fields)
+    if ch is None:
+        raise HTTPException(404, "캐릭터를 찾을 수 없어요.")
+    return ch
+
+
+@app.delete("/api/studio/{project_id}/characters/{char_id}")
+def studio_delete_character(project_id: str, char_id: str):
+    if not studio.delete_character(project_id, char_id):
+        raise HTTPException(404, "캐릭터를 찾을 수 없어요.")
+    return {"ok": True}
+
+
 @app.post("/api/studio/{project_id}/episodes")
 def studio_add_episode(project_id: str):
     ep = studio.add_episode(project_id)

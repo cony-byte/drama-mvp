@@ -344,13 +344,16 @@ button#goToStudioBtn {
 .studio-roster {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .studio-roster .roster-item {
   flex: 1;
+  min-width: 80px;
   background: var(--card);
   border-radius: 12px;
   padding: 8px;
   text-align: center;
+  cursor: pointer;
 }
 .studio-roster img {
   width: 100%;
@@ -359,6 +362,71 @@ button#goToStudioBtn {
   border-radius: 50%;
 }
 .studio-roster .roster-name { font-size: 12px; margin-top: 4px; }
+
+button#addCharacterBtn, button#addEpisodeBtn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px dashed #444;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+#characterDetailView {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#characterDetailView label { font-size: 13px; color: var(--muted); margin-top: 4px; }
+#characterDetailView input {
+  width: 100%;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid #2a2a33;
+  background: var(--card);
+  color: var(--text);
+  font-size: 15px;
+}
+.character-detail-photo-placeholder {
+  width: 100%;
+  max-width: 240px;
+  aspect-ratio: 1 / 1;
+  margin: 0 auto;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+  background: linear-gradient(135deg, var(--accent-dim), var(--card));
+}
+.character-detail-photo-placeholder img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+button#regenPortraitBtn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #333;
+  background: var(--card);
+  color: var(--text);
+  font-size: 14px;
+}
+button#deleteCharacterBtn { background: #402323; }
+button#closeCharacterDetailBtn {
+  width: 100%;
+  padding: 14px;
+  border-radius: 14px;
+  border: none;
+  background: #333;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
 
 .studio-episodes {
   display: flex;

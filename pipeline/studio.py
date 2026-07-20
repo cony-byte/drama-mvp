@@ -53,6 +53,7 @@ def create_project(idea: str, card: dict) -> str:
 
     characters = card.get("characters", [])
     for ch in characters:
+        ch.setdefault("id", uuid.uuid4().hex)
         try:
             _save_character_reference(work, ch)
         except Exception:
@@ -75,6 +76,57 @@ def create_project(idea: str, card: dict) -> str:
             "episodes": [_new_episode(1)],
         }
     return project_id
+
+
+def add_character(project_id: str, character: dict) -> dict | None:
+    """캐릭터 카드 추가. 이미지가 있으면 요소 레지스트리에도 등록(얼굴 참조)."""
+    with _LOCK:
+        p = _PROJECTS.get(project_id)
+        if not p:
+            return None
+        character = dict(character)
+        character["id"] = uuid.uuid4().hex
+        work = p["work"]
+    try:
+        _save_character_reference(work, character)
+    except Exception:
+        pass
+    with _LOCK:
+        p = _PROJECTS.get(project_id)
+        if not p:
+            return None
+        p["characters"].append(character)
+        return dict(character)
+
+
+def update_character(project_id: str, char_id: str, **fields) -> dict | None:
+    """캐릭터 필드 수정(이름·역할·대사·이미지). 이미지가 바뀌면 참조 파일도 다시 저장."""
+    with _LOCK:
+        p = _PROJECTS.get(project_id)
+        if not p:
+            return None
+        ch = next((c for c in p["characters"] if c.get("id") == char_id), None)
+        if not ch:
+            return None
+        ch.update(fields)
+        work = p["work"]
+        updated = dict(ch)
+    if "image" in fields:
+        try:
+            _save_character_reference(work, updated)
+        except Exception:
+            pass
+    return updated
+
+
+def delete_character(project_id: str, char_id: str) -> bool:
+    with _LOCK:
+        p = _PROJECTS.get(project_id)
+        if not p:
+            return False
+        before = len(p["characters"])
+        p["characters"] = [c for c in p["characters"] if c.get("id") != char_id]
+        return len(p["characters"]) != before
 
 
 def _new_episode(num: int) -> dict:
