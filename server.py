@@ -14,8 +14,9 @@ from pydantic import BaseModel
 from pipeline import chat, jobs, parsing, studio
 from pipeline.orchestrator import (
     chat_reply, compose_idea_from_chat, extract_and_register_elements,
-    generate_character_portrait, generate_conti, generate_key_scene_image, generate_pitch_card,
-    generate_scene_plan, generate_script, generate_shots_by_scene, run_full_pipeline,
+    generate_character_portrait, generate_conti, generate_episode_summary,
+    generate_key_scene_image, generate_pitch_card, generate_scene_plan, generate_script,
+    generate_shots_by_scene, run_full_pipeline,
 )
 
 app = FastAPI()
@@ -233,7 +234,11 @@ def studio_advance_episode(project_id: str, num: int):
     if stage == "대본 대기":
         script = generate_script(idea, project["logline"], episode=num,
                                  characters=project["characters"])
-        studio.update_episode(project_id, num, script=script, stage="대본 완료")
+        try:
+            summary = generate_episode_summary(script)
+        except Exception:
+            summary = ""  # 실패해도 대본 완료 자체는 막지 않음 — 화면에서 빈 상태로 보임
+        studio.update_episode(project_id, num, script=script, summary=summary, stage="대본 완료")
     elif stage == "대본 완료":
         plan_text = generate_scene_plan(episode["script"], episode=num,
                                         characters=project["characters"])

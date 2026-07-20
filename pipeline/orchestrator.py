@@ -145,6 +145,17 @@ def generate_synopsis(idea: str, logline: str, characters: list[dict]) -> str:
     return _with_retry(cw_generator.complete, SYNOPSIS_SYSTEM, user_msg).strip()
 
 
+EPISODE_SUMMARY_SYSTEM = """너는 숏폼 로맨스 드라마 편집자다. 주어진 한 화 분량의 대본을 읽고
+그 화의 줄거리 요약을 2~3문장으로 써라 — 이 화 안에서 어떤 사건이 벌어지고 어떻게 끝나는지
+(엔딩 훅 포함)만 짧게. 대본에 없는 내용을 지어내지 마라. 제목·헤더 없이 본문만 출력해라."""
+
+
+def generate_episode_summary(script: str) -> str:
+    """스튜디오 화 상세 화면의 "요약" — 전체 줄거리(시놉시스)와 달리 이 화 하나의 사건만 짧게."""
+    user_msg = f"다음 대본의 줄거리를 2~3문장으로 요약해줘:\n{script}"
+    return _with_retry(cw_generator.complete, EPISODE_SUMMARY_SYSTEM, user_msg).strip()
+
+
 # storyboard-bot/app.py의 STILL_STYLE·_IDEALIZED_FACE_GUIDANCE(원본은 55~60% 리얼리즘 지정)를
 # 가져오되, 사용자 요청으로 리얼리즘 비율만 80%로 올림 — 그 외 "실존 인물처럼 안 보이게",
 # "사진이 아니라 스타일화된 일러스트" 지침은 그대로 유지.

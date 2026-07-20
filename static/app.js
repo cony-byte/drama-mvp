@@ -19,6 +19,7 @@ const views = {
   videoPrep: $("videoPrepView"),
   studio: $("studioView"),
   characterDetail: $("characterDetailView"),
+  episodeDetail: $("episodeDetailView"),
   progress: $("progressView"),
   result: $("resultView"),
   error: $("errorView"),
@@ -367,6 +368,7 @@ function renderStudio(project) {
   for (const ep of project.episodes || []) {
     const div = document.createElement("div");
     div.className = "episode-card";
+    div.dataset.num = ep.num;
     const done = ep.stage === "샷분해 완료";  // 이후 단계(이미지~합본)는 아직 미연결
     div.innerHTML = `
       <div>
@@ -409,6 +411,44 @@ $("studioEpisodes").addEventListener("click", async (e) => {
     alert(`다음 단계 진행 실패: ${err.message}`);
   }
 });
+
+$("studioEpisodes").addEventListener("click", (e) => {
+  if (e.target.closest("button[data-num]")) return;
+  const card = e.target.closest(".episode-card[data-num]");
+  if (card) openEpisodeDetail(Number(card.dataset.num));
+});
+
+function openEpisodeDetail(num) {
+  const ep = (currentStudioProject.episodes || []).find((e) => e.num === num);
+  if (!ep) return;
+  $("episodeDetailTitle").textContent = `${ep.num}화`;
+
+  const mentioned = new Set();
+  if (ep.shots_by_scene) {
+    for (const shots of Object.values(ep.shots_by_scene)) {
+      for (const s of shots) for (const n of s.characters || []) mentioned.add(n);
+    }
+  }
+  const allChars = currentStudioProject.characters || [];
+  // 샷 분해 전이라 아직 어떤 인물이 나오는지 알 수 없으면(샷 데이터 없음) 전체 캐릭터로 대체 표시
+  const epChars = mentioned.size ? allChars.filter((c) => mentioned.has(c.name)) : allChars;
+
+  const roster = $("episodeDetailRoster");
+  roster.innerHTML = "";
+  for (const ch of epChars) {
+    const div = document.createElement("div");
+    div.className = "roster-item";
+    const img = ch.image ? `<img src="${ch.image}" alt="${ch.name}">` : "";
+    div.innerHTML = `${img}<div class="roster-name">${ch.name}</div>`;
+    roster.appendChild(div);
+  }
+
+  $("episodeDetailSummary").textContent = ep.summary || "(아직 없음)";
+  $("episodeDetailScript").textContent = ep.script || "(아직 없음)";
+  showView("episodeDetail");
+}
+
+$("closeEpisodeDetailBtn").addEventListener("click", () => showView("studio"));
 
 let currentCharacterId = null;
 

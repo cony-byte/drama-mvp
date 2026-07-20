@@ -147,6 +147,7 @@ def _new_episode(num: int) -> dict:
         "num": num,
         "stage": STAGE_ORDER[0],
         "script": None,
+        "summary": None,
         "plan_text": None,
         "scenes_plan": None,
         "conti_full": None,

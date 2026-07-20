@@ -446,6 +446,7 @@ button#closeCharacterDetailBtn {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  cursor: pointer;
 }
 .episode-card .episode-title { font-weight: 700; font-size: 14px; }
 .episode-card .episode-stage {
@@ -468,6 +469,28 @@ button#addEpisodeBtn {
   background: transparent;
   color: var(--muted);
   font-size: 14px;
+}
+
+#episodeDetailView {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#episodeDetailView h3 { font-size: 15px; margin: 10px 0 0; }
+.episode-script {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.6;
+}
+button#closeEpisodeDetailBtn {
+  width: 100%;
+  padding: 14px;
+  border-radius: 14px;
+  border: none;
+  background: #333;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
 }
 
 #progressView {
