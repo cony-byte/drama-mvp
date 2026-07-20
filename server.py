@@ -11,7 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from pipeline import chat, jobs
-from pipeline.orchestrator import chat_reply, compose_idea_from_chat, generate_pitch_card, run_full_pipeline
+from pipeline.orchestrator import (
+    chat_reply, compose_idea_from_chat, generate_pitch_card_with_portraits, run_full_pipeline,
+)
 
 app = FastAPI()
 app.add_middleware(
@@ -83,7 +85,7 @@ def chat_finalize(session_id: str):
     if history is None:
         raise HTTPException(404, "채팅 세션을 찾을 수 없어요.")
     idea = compose_idea_from_chat(history)
-    return generate_pitch_card(idea)
+    return generate_pitch_card_with_portraits(idea)
 
 
 @app.get("/api/jobs/{job_id}")

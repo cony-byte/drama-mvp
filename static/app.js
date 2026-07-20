@@ -180,7 +180,11 @@ function renderPitchCard(card) {
   for (const ch of card.characters || []) {
     const div = document.createElement("div");
     div.className = "character-card";
+    const photo = ch.image
+      ? `<img class="char-photo" src="${ch.image}" alt="${ch.name || ""}">`
+      : `<div class="char-photo-placeholder">이미지 생성 실패</div>`;
     div.innerHTML = `
+      ${photo}
       <div class="char-name">${ch.name || ""}</div>
       <div class="char-role">${ch.role || ""}</div>
       <div class="char-line">"${ch.line || ""}"</div>
@@ -232,9 +236,12 @@ async function requestPitchCard() {
 }
 
 async function finalizeChat() {
-  // 지금은 로그라인+인물 카드까지만 만들고 멈춘다(영상까지 이어지는 전체 파이프라인은 아직 안 붙임).
+  // 지금은 로그라인+인물 카드(+인물 이미지)까지만 만들고 멈춘다(영상까지 이어지는
+  // 전체 파이프라인은 아직 안 붙임). 이미지 생성이 포함돼 텍스트만보다 시간이 더 걸린다.
   if (!sessionId) return;
   $("finalizeBtn").disabled = true;
+  const original = $("finalizeBtn").textContent;
+  $("finalizeBtn").textContent = "카드+이미지 만드는 중… (몇십 초 걸려요)";
   try {
     const card = await requestPitchCard();
     renderPitchCard(card);
@@ -244,11 +251,14 @@ async function finalizeChat() {
     showView("error");
   } finally {
     $("finalizeBtn").disabled = false;
+    $("finalizeBtn").textContent = original;
   }
 }
 
 async function regeneratePitch() {
   $("regenPitchBtn").disabled = true;
+  const original = $("regenPitchBtn").textContent;
+  $("regenPitchBtn").textContent = "재생성 중…";
   try {
     const card = await requestPitchCard();
     renderPitchCard(card);
@@ -257,6 +267,7 @@ async function regeneratePitch() {
     showView("error");
   } finally {
     $("regenPitchBtn").disabled = false;
+    $("regenPitchBtn").textContent = original;
   }
 }
 $("regenPitchBtn").addEventListener("click", regeneratePitch);

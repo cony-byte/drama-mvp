@@ -122,6 +122,34 @@ def generate_pitch_card(idea: str) -> dict:
     return _with_retry(_once)
 
 
+def generate_character_portrait(character: dict) -> bytes:
+    """인물 카드용 상반신 인물 이미지 1장(PNG bytes). 스틸컷 이미지 생성 API라 영상화 때와
+    달리 클로즈업 안전필터 리스크는 없음(그 필터는 image-to-video 단계 전용)."""
+    prompt = (
+        f"Semi-realistic cinematic portrait of a Korean drama character, upper-body medium shot, "
+        f"soft cinematic lighting, photorealistic, vertical framing. Character: {character.get('name', '')}, "
+        f"{character.get('role', '')}."
+    )
+    png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="2:3", refs=[])
+    return png
+
+
+def generate_pitch_card_with_portraits(idea: str) -> dict:
+    """generate_pitch_card + 각 인물 초상 이미지(base64 data URL)까지 붙여서 반환.
+    이미지 2장을 순차 생성하므로 카드만 만들 때보다 응답이 몇 초~수십 초 더 걸린다."""
+    import base64
+
+    card = generate_pitch_card(idea)
+    for ch in card.get("characters", []):
+        try:
+            png = generate_character_portrait(ch)
+            ch["image"] = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+        except Exception as e:
+            ch["image"] = None
+            ch["image_error"] = str(e)
+    return card
+
+
 def generate_script(idea: str, pitch: str, episode: int = 1) -> str:
     thread_messages = [{"role": "user",
                          "content": f"{pitch}\n\n위 기획안을 바탕으로 {episode}화 대본을 써줘."}]
