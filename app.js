@@ -388,6 +388,44 @@ async function loadStudio(projectId) {
   renderStudio(await res.json());
 }
 
+$("editSynopsisBtn").addEventListener("click", () => {
+  $("studioSynopsisEdit").value = (currentStudioProject && currentStudioProject.synopsis) || "";
+  $("studioSynopsis").classList.add("hidden");
+  $("editSynopsisBtn").classList.add("hidden");
+  $("studioSynopsisEdit").classList.remove("hidden");
+  $("synopsisEditActions").classList.remove("hidden");
+});
+
+function exitSynopsisEdit() {
+  $("studioSynopsisEdit").classList.add("hidden");
+  $("synopsisEditActions").classList.add("hidden");
+  $("studioSynopsis").classList.remove("hidden");
+  $("editSynopsisBtn").classList.remove("hidden");
+}
+
+$("cancelSynopsisBtn").addEventListener("click", exitSynopsisEdit);
+
+$("saveSynopsisBtn").addEventListener("click", async () => {
+  if (!studioProjectId) return;
+  const btn = $("saveSynopsisBtn");
+  btn.disabled = true;
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/studio/${studioProjectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ synopsis: $("studioSynopsisEdit").value.trim() }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    renderStudio(await res.json());
+    exitSynopsisEdit();
+  } catch (e) {
+    alert(`줄거리 저장 실패: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $("studioEpisodes").addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-num]");
   if (!btn || !studioProjectId) return;
