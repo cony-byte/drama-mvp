@@ -417,6 +417,88 @@ def extract_and_register_elements(work: str, conti_full: str) -> dict:
     return data
 
 
+# ── 요소(장소·의상·소품) 고정 레퍼런스 이미지 생성 파이프라인 ──────────────
+# co-writer-bot(dispatch_storyboard._generate_element_candidate/_auto_register_element)에서 가져온
+# 구조 — 인물 얼굴처럼 "장소/의상/소품"도 레퍼런스 이미지를 만들어 요소 id로 등록해두면, 샷 생성
+# 시 shot_refs가 그 이미지를 자동으로 물어(역할별 지시 포함) 컷마다 같은 배경·같은 옷이 나온다.
+# 스틸컷과 화풍을 맞추려고 PORTRAIT_STYLE(세미리얼 일러스트)과 같은 스타일 문구를 공유한다.
+ELEMENT_REF_STYLE = (
+    "Semi-realistic illustration style, painterly cinematic rendering — clearly a stylized "
+    "illustration, not a photograph. No text, letters, captions, or watermark anywhere."
+)
+
+
+def _element_ref_prompt(name: str, etype: str, mood: str = "", context: str = "") -> str:
+    """요소 타입별 레퍼런스 이미지 프롬프트. mood=작품 톤/장르(로그라인 등), context=콘티 발췌."""
+    mood_s = mood.strip()
+    ctx = f" Context: {context.strip()[:300]}." if context.strip() else ""
+    if etype == "place":
+        mood_instr = (
+            f"This location is for a short-form drama with this genre/setting/tone: {mood_s}. "
+            "Match its design, lighting, color palette, and atmosphere to that context — cinematic "
+            "and moody, not a flat neutral stock photo. " if mood_s else
+            "Give the location a clear cinematic mood (deliberate lighting, color, shadow). ")
+        # 조명·분위기는 영화적으로, 공간 구조·건축 자체는 그 장소 종류의 평범한 모습 유지.
+        ordinary = ("The architecture, layout, and furnishings themselves should be ordinary and "
+                    "realistic for this type of location — not exotic or surreal. " if not context.strip() else "")
+        return (f"{ELEMENT_REF_STYLE} — cinematic empty establishing shot of the location '{name}'. "
+                f"{mood_instr}{ordinary}{ctx} No people visible, a clean reference plate.")
+    if etype == "costume":
+        mood_instr = (
+            f"This costume is for a story with this genre/setting/tone: {mood_s}. Make its era, "
+            "silhouette, fabric, and styling consistent with that context. " if mood_s else "")
+        # 구체 묘사(context)가 없으면 튀지 않는 무난한 기본 디자인으로.
+        plain = ("No specific description was given, so default to a plain, understated, minimal "
+                 "design — no bold colors, loud patterns, logos, or eye-catching details. "
+                 if not context.strip() else "")
+        return (f"{ELEMENT_REF_STYLE} reference of a clothing outfit called '{name}', shown as a "
+                "flat lay or on an invisible mannequin (no visible face or head), on a plain solid "
+                f"white background, studio product-shot lighting. {plain}{mood_instr}{ctx}")
+    # prop
+    mood_instr = (f"Style/lighting should feel consistent with this drama's genre/setting/tone: "
+                  f"{mood_s}. " if mood_s else "")
+    return (f"{ELEMENT_REF_STYLE} reference of the object '{name}' alone on a plain neutral "
+            f"background. {mood_instr}{ctx}")
+
+
+def _register_element_image(work: str, name: str, etype: str, png: bytes) -> None:
+    """생성한 요소 레퍼런스 PNG를 refs 디렉토리에 저장하고 요소 id로 등록(파일 연결) —
+    co-writer-bot의 _auto_register_element 저장 로직과 동일(data/refs/<work>/<name>.png)."""
+    dest_dir = oi.config.OPENROUTER_REFS_DIR / oi.canon_work(work)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{_safe_element_filename(name)}.png"
+    (dest_dir / filename).write_bytes(png)
+    oi.register_element(work, name, etype=etype, filename=filename, aliases=[name])
+
+
+def _safe_element_filename(name: str) -> str:
+    return re.sub(r"[^\w가-힣.\-]+", "_", name or "요소").strip("_.") or "요소"
+
+
+def fix_element_references(work: str, mood: str = "", conti_full: str = "") -> dict:
+    """등록됐지만 아직 레퍼런스 이미지가 없는 장소·의상·소품에 대해 고정 이미지를 생성·등록한다.
+    인물(person)은 초상화로 이미 얼굴 레퍼런스가 있으므로 건너뛴다. 반환: {등록됨, 실패} 개수.
+    실패한 요소는 건너뛰고 계속 진행(전체 실패 방지)."""
+    registered, failed = 0, 0
+    for e in oi.load_elements(work):
+        etype = e.get("type")
+        if etype not in ("place", "costume", "prop"):
+            continue
+        if e.get("file"):
+            continue  # 이미 레퍼런스 이미지 있음
+        name = e.get("display") or ""
+        if not name:
+            continue
+        try:
+            prompt = _element_ref_prompt(name, etype, mood=mood, context=conti_full)
+            png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="1:1", refs=[])
+            _register_element_image(work, name, etype, png)
+            registered += 1
+        except Exception:
+            failed += 1
+    return {"registered": registered, "failed": failed}
+
+
 def generate_shots_by_scene(scenes: list[tuple[int, str, str]], work: str | None = None,
                             characters: list[dict] | None = None) -> dict[int, list[dict]]:
     """씬별 상세콘티 body를 샷 단위로 분해. 반환: {씬번호: [shot dict, ...]}.
@@ -624,6 +706,14 @@ def produce_episode_video(project: dict, episode: dict, job_id: str) -> None:
             extract_and_register_elements(work, conti_full)
         except Exception:
             pass
+        # 장소·의상·소품도 얼굴처럼 고정 레퍼런스 이미지를 만들어 요소 id로 등록 —
+        # 이후 샷 생성이 shot_refs로 이 이미지들을 물어 배경·의상이 컷마다 일관되게 유지된다.
+        jobs.update(job_id, stage="배경·의상 고정 중")
+        try:
+            mood = " · ".join(x for x in [project.get("logline", ""), project.get("synopsis", "")[:150]] if x)
+            fix_element_references(work, mood=mood, conti_full=conti_full)
+        except Exception:
+            pass  # 요소 이미지 고정 실패해도 영상 제작 자체는 계속(텍스트 이름 재사용으로 최소 일관성)
         jobs.update(job_id, stage="샷 분해 중")
         shots_by_scene = generate_shots_by_scene(scenes, work=work, characters=characters)
 
