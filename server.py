@@ -163,6 +163,20 @@ def studio_get(project_id: str):
     return project
 
 
+class ProjectUpdateRequest(BaseModel):
+    logline: str | None = None
+    synopsis: str | None = None
+
+
+@app.patch("/api/studio/{project_id}")
+def studio_update(project_id: str, req: ProjectUpdateRequest):
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    project = studio.update_project(project_id, **fields)
+    if project is None:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    return project
+
+
 class CharacterCreateRequest(BaseModel):
     name: str
     gender: str = ""

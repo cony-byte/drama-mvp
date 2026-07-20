@@ -71,8 +71,16 @@
     <div id="studioRoster" class="studio-roster"></div>
     <button id="addCharacterBtn" type="button">+ 캐릭터 추가</button>
 
-    <h3>전체 줄거리</h3>
+    <div class="section-head">
+      <h3>전체 줄거리</h3>
+      <button id="editSynopsisBtn" type="button" class="text-btn">✏️ 수정</button>
+    </div>
     <div id="studioSynopsis" class="pitch-block"></div>
+    <textarea id="studioSynopsisEdit" class="hidden pitch-edit" rows="8"></textarea>
+    <div id="synopsisEditActions" class="pitch-actions hidden">
+      <button id="saveSynopsisBtn" type="button">✅ 저장</button>
+      <button id="cancelSynopsisBtn" type="button">취소</button>
+    </div>
 
     <h3>화 목록</h3>
     <div id="studioEpisodes" class="studio-episodes"></div>

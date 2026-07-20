@@ -94,6 +94,19 @@ def create_project(idea: str, card: dict) -> str:
     return project_id
 
 
+def update_project(project_id: str, **fields) -> dict | None:
+    """프로젝트 상위 필드(로그라인·전체 줄거리 등) 수정. 허용된 키만 반영한다."""
+    allowed = {"logline", "synopsis"}
+    with _LOCK:
+        p = _PROJECTS.get(project_id)
+        if not p:
+            return None
+        for k, v in fields.items():
+            if k in allowed:
+                p[k] = v
+        return dict(p)
+
+
 def add_character(project_id: str, character: dict) -> dict | None:
     """캐릭터 카드 추가. 이미지가 있으면 요소 레지스트리에도 등록(얼굴 참조)."""
     with _LOCK:

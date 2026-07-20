@@ -352,6 +352,21 @@ button#goToStudioBtn {
 #studioView h3 { font-size: 15px; margin: 10px 0 0; }
 #studioLogline { font-size: 14px; }
 
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.section-head h3 { margin: 10px 0 0; }
+.text-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 4px;
+}
+
 .studio-roster {
   display: flex;
   gap: 10px;
