@@ -190,14 +190,17 @@ async function loadCharacterPortrait(ch, imgBoxEl) {
   }
 }
 
-// 임팩트 장면 이미지도 인물 이미지와 같은 패턴 — 카드 텍스트 표시 후 따로 비동기로 불러온다.
-async function loadKeySceneImage(keyScene, imgBoxEl) {
+// 임팩트 장면 이미지 — 인물 초상화(characterImages)를 참조로 넘겨 같은 얼굴이 장면에 나오게 한다.
+async function loadKeySceneImage(keyScene, imgBoxEl, characterImages) {
   try {
     const base = getApiBase();
     const res = await fetch(`${base}/api/scene-image`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ situation: keyScene.situation || "" }),
+      body: JSON.stringify({
+        situation: keyScene.situation || "",
+        character_images: (characterImages || []).filter(Boolean),
+      }),
     });
     if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
     const { image } = await res.json();
@@ -217,6 +220,7 @@ function renderPitchCard(card) {
 
   const box = $("charactersBox");
   box.innerHTML = "";
+  const portraitPromises = [];
   for (const ch of card.characters || []) {
     const div = document.createElement("div");
     div.className = "character-card";
@@ -231,7 +235,7 @@ function renderPitchCard(card) {
     `;
     box.appendChild(div);
     if (!ch.image) {
-      loadCharacterPortrait(ch, div.querySelector(".char-photo-placeholder"));
+      portraitPromises.push(loadCharacterPortrait(ch, div.querySelector(".char-photo-placeholder")));
     }
   }
 
@@ -242,7 +246,10 @@ function renderPitchCard(card) {
   } else {
     imgBox.textContent = "이미지 생성 중…";
     imgBox.className = "key-scene-photo-placeholder";
-    loadKeySceneImage(keyScene, imgBox);
+    // 인물 초상화가 다 만들어진 뒤에 그 얼굴을 참조로 장면을 생성한다(순서 보장).
+    Promise.all(portraitPromises).then(() => {
+      loadKeySceneImage(keyScene, imgBox, (card.characters || []).map((c) => c.image));
+    });
   }
   $("keySceneLines").innerHTML = (keyScene.lines || [])
     .map((line) => `<div>${line}</div>`).join("");

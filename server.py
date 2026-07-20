@@ -112,12 +112,14 @@ def portrait(req: PortraitRequest):
 
 class SceneImageRequest(BaseModel):
     situation: str
+    character_images: list[str] = []  # 인물 초상화 data URL — 장면에 같은 얼굴을 반영하기 위한 참조
 
 
 @app.post("/api/scene-image")
 def scene_image(req: SceneImageRequest):
-    """1화 임팩트 장면 미리보기 이미지. portrait와 동일하게 stateless·비동기 호출용."""
-    png = generate_key_scene_image(req.situation)
+    """1화 임팩트 장면 미리보기 이미지. portrait와 동일하게 stateless·비동기 호출용.
+    character_images를 주면 그 인물 얼굴을 장면에 반영한다."""
+    png = generate_key_scene_image(req.situation, character_images=req.character_images)
     return {"image": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}
 
 

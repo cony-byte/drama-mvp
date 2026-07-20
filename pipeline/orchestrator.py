@@ -247,10 +247,13 @@ def generate_character_card(name: str, hint: str = "", logline: str = "",
     }
 
 
-def generate_key_scene_image(situation: str) -> bytes:
-    """기획 카드의 "1화 임팩트 장면" 미리보기 이미지 1장(PNG bytes)."""
+def generate_key_scene_image(situation: str, character_images: list[str] | None = None) -> bytes:
+    """기획 카드의 "1화 임팩트 장면" 미리보기 이미지 1장(PNG bytes). character_images(인물 초상화
+    data URL 목록)를 참조로 넘기면 그 얼굴이 장면에도 그대로 반영된다 — 안 넘기면 매번 다른
+    얼굴이 나옴(사용자 리포트: "임팩트 장면에 인물이 전혀 반영 안 됨")."""
+    refs = [img for img in (character_images or []) if img and img.startswith("data:image")]
     prompt = f"Semi-realistic cinematic still, vertical 9:16 framing. Scene: {situation} {PORTRAIT_STYLE}"
-    png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="9:16", refs=[])
+    png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="9:16", refs=refs)
     return png
 
 
