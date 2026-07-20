@@ -362,12 +362,13 @@ function renderStudio(project) {
   for (const ep of project.episodes || []) {
     const div = document.createElement("div");
     div.className = "episode-card";
+    const done = ep.stage === "샷분해 완료";  // 이후 단계(이미지~합본)는 아직 미연결
     div.innerHTML = `
       <div>
         <div class="episode-title">${ep.num}화</div>
         <div class="episode-stage">${ep.stage}</div>
       </div>
-      <button type="button" data-num="${ep.num}">다음 단계</button>
+      <button type="button" data-num="${ep.num}" ${done ? "disabled" : ""}>${done ? "완료" : "다음 단계"}</button>
     `;
     episodesBox.appendChild(div);
   }
@@ -379,6 +380,30 @@ async function loadStudio(projectId) {
   if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
   renderStudio(await res.json());
 }
+
+$("studioEpisodes").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-num]");
+  if (!btn || !studioProjectId) return;
+  const num = btn.dataset.num;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "진행 중…";
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/studio/${studioProjectId}/episodes/${num}/advance`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+    }
+    await loadStudio(studioProjectId);
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = original;
+    alert(`다음 단계 진행 실패: ${err.message}`);
+  }
+});
 
 $("goToStudioBtn").addEventListener("click", async () => {
   if (!currentCard) return;
