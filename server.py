@@ -14,9 +14,9 @@ from pydantic import BaseModel
 from pipeline import chat, jobs, parsing, studio
 from pipeline.orchestrator import (
     chat_reply, compose_idea_from_chat, extract_and_register_elements,
-    generate_character_portrait, generate_conti, generate_episode_summary,
-    generate_key_scene_image, generate_pitch_card, generate_scene_plan, generate_script,
-    generate_shots_by_scene, run_full_pipeline,
+    generate_character_card, generate_character_portrait, generate_conti,
+    generate_episode_summary, generate_key_scene_image, generate_pitch_card,
+    generate_scene_plan, generate_script, generate_shots_by_scene, run_full_pipeline,
 )
 
 app = FastAPI()
@@ -194,6 +194,26 @@ def studio_add_character(project_id: str, req: CharacterCreateRequest):
     if ch is None:
         raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
     return ch
+
+
+class CharacterGenerateRequest(BaseModel):
+    name: str = ""
+    hint: str = ""
+
+
+@app.post("/api/studio/{project_id}/characters/generate")
+def studio_generate_character(project_id: str, req: CharacterGenerateRequest):
+    """이름(+선택 힌트)으로 캐릭터 카드 필드를 AI 생성. 저장은 안 하고 생성 결과만 반환 —
+    프론트가 상세 화면 입력칸을 채우고, 사용자가 검토 후 직접 저장한다. 작품 로그라인·기존
+    인물을 참고로 톤을 맞춘다."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    fields = generate_character_card(
+        req.name, hint=req.hint, logline=project.get("logline", ""),
+        characters=project.get("characters", []),
+    )
+    return fields
 
 
 class CharacterUpdateRequest(BaseModel):

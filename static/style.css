@@ -404,6 +404,16 @@ button#addCharacterBtn, button#addEpisodeBtn {
   flex-direction: column;
   gap: 10px;
 }
+button#genCharacterBtn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--accent);
+  background: var(--accent-dim);
+  color: var(--text);
+  font-size: 14px;
+}
+button#genCharacterBtn:disabled { opacity: 0.6; }
 #characterDetailView label { font-size: 13px; color: var(--muted); margin-top: 4px; }
 #characterDetailView input, #characterDetailView select {
   width: 100%;

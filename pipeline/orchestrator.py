@@ -203,6 +203,50 @@ def generate_character_portrait(character: dict) -> bytes:
     return png
 
 
+def _characters_bible_for_tone(characters: list[dict] | None) -> dict:
+    """char_add_system이 참고할 "기존 등장인물" 블록용 — 톤·관계 참고 목적이라 이름+주요 필드만."""
+    chars = {}
+    for c in characters or []:
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        chars[name] = {
+            "성별": c.get("gender", ""), "나이": c.get("age", ""),
+            "포지션": c.get("role", ""), "외형": c.get("appearance", ""),
+            "설정": c.get("description", ""), "핵심대사": c.get("line", ""),
+        }
+    return chars
+
+
+def generate_character_card(name: str, hint: str = "", logline: str = "",
+                            characters: list[dict] | None = None) -> dict:
+    """이름(+선택 힌트)으로 캐릭터 카드 전체를 AI 생성 — 원본 봇의 char_add 프롬프트 재사용.
+    로그라인·기존 인물을 참고로 넘겨 작품 톤/관계에 맞춘다. 반환은 우리 캐릭터 스키마
+    (gender/age/role/line/appearance/description)로 매핑한 dict."""
+    bible = {}
+    if logline:
+        bible["logline"] = logline
+    tone_chars = _characters_bible_for_tone(characters)
+    if tone_chars:
+        bible["characters"] = tone_chars
+    system = cw_prompts.char_add_system(bible or None)
+    user = cw_prompts.char_add_user(name or "새 인물",
+                                    hint or "이 작품 톤에 어울리는 인물로 자유롭게 만들어줘")
+    raw = _with_retry(cw_generator.complete, system, user)
+    data = parsing.parse_json_object(raw)
+    # char_add는 "설정"(배경·특징)과 "설명"(서사 기능·관계)을 따로 내는데, 우리 스키마엔
+    # description 하나뿐이라 둘을 합쳐 넣는다.
+    desc = " ".join(x for x in [data.get("설정", ""), data.get("설명", "")] if x).strip()
+    return {
+        "gender": (data.get("성별") or "").strip(),
+        "age": str(data.get("나이") or "").strip(),
+        "role": (data.get("포지션") or "").strip(),
+        "line": (data.get("핵심대사") or "").strip(),
+        "appearance": (data.get("외형") or "").strip(),
+        "description": desc,
+    }
+
+
 def generate_key_scene_image(situation: str) -> bytes:
     """기획 카드의 "1화 임팩트 장면" 미리보기 이미지 1장(PNG bytes)."""
     prompt = f"Semi-realistic cinematic still, vertical 9:16 framing. Scene: {situation} {PORTRAIT_STYLE}"
