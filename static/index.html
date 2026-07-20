@@ -35,8 +35,18 @@
 
   <section id="pitchView" class="hidden">
     <h2>로그라인</h2>
-    <pre id="pitchText"></pre>
-    <button id="pitchRestartBtn" type="button">다시 만들기</button>
+
+    <div id="loglineDisplay" class="pitch-block"></div>
+    <textarea id="loglineEdit" class="hidden pitch-edit" rows="3"></textarea>
+
+    <div id="charactersBox"></div>
+
+    <div class="pitch-actions">
+      <button id="editPitchBtn" type="button">✏️ 수정</button>
+      <button id="regenPitchBtn" type="button">🔁 재생성</button>
+    </div>
+    <button id="backToChatBtn" type="button">↩️ 다시 기획하기</button>
+    <button id="nextStageBtn" type="button">다음 단계 →</button>
   </section>
 
   <section id="progressView" class="hidden">

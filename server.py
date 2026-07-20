@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from pipeline import chat, jobs
-from pipeline.orchestrator import chat_reply, compose_idea_from_chat, generate_logline, run_full_pipeline
+from pipeline.orchestrator import chat_reply, compose_idea_from_chat, generate_pitch_card, run_full_pipeline
 
 app = FastAPI()
 app.add_middleware(
@@ -76,14 +76,14 @@ def chat_continue(session_id: str, req: ChatReplyRequest):
 
 @app.post("/api/chat/{session_id}/finalize")
 def chat_finalize(session_id: str):
-    """지금은 로그라인 한두 문장만 만들어서 바로 보여준다(전체 기획안·영상까지 이어지는
-    파이프라인은 아직 안 붙임 — 등장인물·줄거리까지 담긴 긴 기획안은 다음 단계에서)."""
+    """지금은 로그라인+두 주인공 카드까지만 만들어서 보여준다(전체 기획안·영상까지 이어지는
+    파이프라인은 아직 안 붙임). "재생성"도 이 엔드포인트를 그대로 다시 호출한다 — 같은
+    채팅 이력을 기준으로 새 카드를 만드는 것뿐이라 별도 엔드포인트가 필요 없음."""
     history = chat.get_history(session_id)
     if history is None:
         raise HTTPException(404, "채팅 세션을 찾을 수 없어요.")
     idea = compose_idea_from_chat(history)
-    logline = generate_logline(idea)
-    return {"pitch": logline}
+    return generate_pitch_card(idea)
 
 
 @app.get("/api/jobs/{job_id}")

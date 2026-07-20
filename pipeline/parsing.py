@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""storyboard-bot/app.py의 순수 파싱 함수 복사본(Slack 비의존).
+"""storyboard-bot/app.py의 순수 파싱 함수 복사본(Slack 비의존) + drama-mvp 자체 파싱 유틸.
 원본: _repair_json_quotes(694 근처), _parse_json_array(694), _SCENE_HDR_RE(1612),
-_PLAN_SCENE_LINE_RE(2221), _parse_plan_scenes(2224), _split_scenes(2257)."""
+_PLAN_SCENE_LINE_RE(2221), _parse_plan_scenes(2224), _split_scenes(2257).
+parse_json_object는 신규(로그라인+인물 카드처럼 배열이 아닌 객체 응답 파싱용)."""
 import json
 import re
 
@@ -40,6 +41,19 @@ def parse_json_array(text: str) -> list:
     s, e = t.find("["), t.rfind("]")
     if s == -1 or e == -1 or e < s:
         raise ValueError("응답에서 JSON 배열([...])을 못 찾았어요.")
+    body = t[s:e + 1]
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return json.loads(repair_json_quotes(body))
+
+
+def parse_json_object(text: str) -> dict:
+    """parse_json_array와 같은 패턴이지만 JSON 배열이 아니라 객체({...}) 하나를 뽑는다."""
+    t = str(text).strip()
+    s, e = t.find("{"), t.rfind("}")
+    if s == -1 or e == -1 or e < s:
+        raise ValueError("응답에서 JSON 객체({...})를 못 찾았어요.")
     body = t[s:e + 1]
     try:
         return json.loads(body)

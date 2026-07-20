@@ -163,21 +163,83 @@ button#finalizeBtn { margin-top: 4px; }
 #pitchView {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 #pitchView h2 { font-size: 18px; text-align: center; margin: 0; }
-#pitchText {
+
+.pitch-block {
   background: var(--card);
   border-radius: 14px;
   padding: 16px;
-  font-family: inherit;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
   white-space: pre-wrap;
-  max-height: 60vh;
-  overflow-y: auto;
 }
-button#pitchRestartBtn {
+.pitch-edit {
+  width: 100%;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--accent);
+  background: var(--card);
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+#charactersBox {
+  display: flex;
+  gap: 10px;
+}
+.character-card {
+  flex: 1;
+  background: var(--card);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.character-card .char-name { font-weight: 700; font-size: 15px; }
+.character-card .char-role { color: var(--muted); font-size: 12px; }
+.character-card .char-line { font-size: 13px; line-height: 1.4; font-style: italic; }
+.character-card input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #333;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.pitch-actions {
+  display: flex;
+  gap: 8px;
+}
+.pitch-actions button {
+  flex: 1;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid #333;
+  background: var(--card);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+button#backToChatBtn {
+  width: 100%;
+  padding: 14px;
+  border-radius: 14px;
+  border: none;
+  background: #333;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+button#nextStageBtn {
   width: 100%;
   padding: 16px;
   border-radius: 14px;

@@ -163,16 +163,81 @@ async function pollJob(jobId) {
   }
 }
 
-async function finalizeChat() {
-  // 지금은 기획안까지만 만들고 멈춘다(영상까지 이어지는 전체 파이프라인은 아직 안 붙임).
-  if (!sessionId) return;
+// 현재 화면에 떠 있는 로그라인+인물 카드(수정 시 여기 반영, 서버에는 안 보냄 —
+// 아직 이 값을 읽어가는 다음 단계가 없어서 로컬 상태로만 충분).
+let currentCard = null;
+let editing = false;
+
+function renderPitchCard(card) {
+  currentCard = card;
+  editing = false;
+  $("loglineDisplay").textContent = card.logline;
+  $("loglineDisplay").classList.remove("hidden");
+  $("loglineEdit").classList.add("hidden");
+
+  const box = $("charactersBox");
+  box.innerHTML = "";
+  for (const ch of card.characters || []) {
+    const div = document.createElement("div");
+    div.className = "character-card";
+    div.innerHTML = `
+      <div class="char-name">${ch.name || ""}</div>
+      <div class="char-role">${ch.role || ""}</div>
+      <div class="char-line">"${ch.line || ""}"</div>
+    `;
+    box.appendChild(div);
+  }
+  $("editPitchBtn").textContent = "✏️ 수정";
+}
+
+function enterEditMode() {
+  editing = true;
+  $("loglineDisplay").classList.add("hidden");
+  $("loglineEdit").value = currentCard.logline;
+  $("loglineEdit").classList.remove("hidden");
+
+  const box = $("charactersBox");
+  box.innerHTML = "";
+  currentCard.characters.forEach((ch, i) => {
+    const div = document.createElement("div");
+    div.className = "character-card";
+    div.innerHTML = `
+      <input data-i="${i}" data-field="name" value="${ch.name || ""}" placeholder="이름">
+      <input data-i="${i}" data-field="role" value="${ch.role || ""}" placeholder="역할/설정">
+      <input data-i="${i}" data-field="line" value="${ch.line || ""}" placeholder="핵심 대사">
+    `;
+    box.appendChild(div);
+  });
+  $("editPitchBtn").textContent = "💾 저장";
+}
+
+function saveEdits() {
+  currentCard.logline = $("loglineEdit").value.trim();
+  document.querySelectorAll("#charactersBox input").forEach((input) => {
+    currentCard.characters[Number(input.dataset.i)][input.dataset.field] = input.value.trim();
+  });
+  renderPitchCard(currentCard);
+}
+
+$("editPitchBtn").addEventListener("click", () => {
+  if (editing) saveEdits();
+  else enterEditMode();
+});
+
+async function requestPitchCard() {
   const base = getApiBase();
+  const res = await fetch(`${base}/api/chat/${sessionId}/finalize`, { method: "POST" });
+  if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+  return res.json();
+}
+
+async function finalizeChat() {
+  // 지금은 로그라인+인물 카드까지만 만들고 멈춘다(영상까지 이어지는 전체 파이프라인은 아직 안 붙임).
+  if (!sessionId) return;
   $("finalizeBtn").disabled = true;
   try {
-    const res = await fetch(`${base}/api/chat/${sessionId}/finalize`, { method: "POST" });
-    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
-    const { pitch } = await res.json();
-    $("pitchText").textContent = pitch;
+    const card = await requestPitchCard();
+    renderPitchCard(card);
     showView("pitch");
   } catch (e) {
     $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
@@ -181,6 +246,28 @@ async function finalizeChat() {
     $("finalizeBtn").disabled = false;
   }
 }
+
+async function regeneratePitch() {
+  $("regenPitchBtn").disabled = true;
+  try {
+    const card = await requestPitchCard();
+    renderPitchCard(card);
+  } catch (e) {
+    $("errorText").textContent = `재생성 실패: ${e.message}`;
+    showView("error");
+  } finally {
+    $("regenPitchBtn").disabled = false;
+  }
+}
+$("regenPitchBtn").addEventListener("click", regeneratePitch);
+
+// 장르·기획 자체를 바꾸고 싶을 때 — 채팅 이력은 그대로 두고 화면만 되돌아간다.
+$("backToChatBtn").addEventListener("click", () => showView("chat"));
+
+// 다음 단계(대본~영상 생성으로 이어지는 흐름)는 아직 미정 — 자리만 마련.
+$("nextStageBtn").addEventListener("click", () => {
+  alert("다음 단계는 아직 준비 중이에요!");
+});
 
 $("startChatBtn").addEventListener("click", startChat);
 $("chatSendBtn").addEventListener("click", sendChatMessage);
@@ -210,5 +297,4 @@ function resetToInput() {
   showView("input");
 }
 $("restartBtn").addEventListener("click", resetToInput);
-$("pitchRestartBtn").addEventListener("click", resetToInput);
 $("errorRetryBtn").addEventListener("click", resetToInput);

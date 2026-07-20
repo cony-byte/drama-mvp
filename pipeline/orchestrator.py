@@ -101,6 +101,27 @@ def generate_logline(idea: str) -> str:
     return _with_retry(cw_generator.complete, LOGLINE_SYSTEM, user_msg).strip()
 
 
+PITCH_CARD_SYSTEM = """너는 숏폼 로맨스 드라마 카피라이터다. 주어진 내용을 바탕으로 로그라인과
+두 주인공(남녀 주인공, 정확히 2명) 정보를 JSON 객체 하나로만 출력해라 — 설명·코드펜스 없이
+JSON만.
+
+형식:
+{"logline": "한두 문장 로그라인",
+ "characters": [
+   {"name": "이름", "role": "성별/신분 등 짧은 설정(예: '여 · 재벌가 2세')", "line": "그 인물의 핵심 대사 한 줄"},
+   {"name": "이름", "role": "...", "line": "..."}
+ ]}"""
+
+
+def generate_pitch_card(idea: str) -> dict:
+    """로그라인 + 두 주인공(이름/역할/핵심대사) 카드. 실패하면(파싱 오류 포함) 1회 재시도."""
+    def _once():
+        user_msg = f"다음 내용을 바탕으로 로그라인+두 주인공 카드를 만들어줘:\n{idea}"
+        raw = cw_generator.complete(PITCH_CARD_SYSTEM, user_msg).strip()
+        return parsing.parse_json_object(raw)
+    return _with_retry(_once)
+
+
 def generate_script(idea: str, pitch: str, episode: int = 1) -> str:
     thread_messages = [{"role": "user",
                          "content": f"{pitch}\n\n위 기획안을 바탕으로 {episode}화 대본을 써줘."}]
