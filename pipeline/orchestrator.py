@@ -189,34 +189,54 @@ PORTRAIT_STYLE = (
     "No text, letters, captions, subtitles, or written words anywhere in the image."
 )
 
+# 인물 고정 이미지는 '얼굴 전용 레퍼런스'로 만든다 — 이후 샷 생성이 이 이미지를 얼굴 정체성
+# 참조(input_references, role=person)로 쓰는데, 전신·강한 의상·액세서리가 들어가면 그 옷/소품까지
+# 컷에 딸려 나와 의상 일관성이 깨진다. 그래서 얼굴~어깨 크롭 + 중립 무지 상의 + 액세서리 제거로
+# 고정해, 오직 얼굴·헤어 정체성만 담기게 한다.
+FACE_REF_FRAMING = (
+    "Head-and-shoulders identity headshot, tightly framed on the face (top of head to shoulders "
+    "only, no full body). Plain neutral crew-neck t-shirt in a muted solid color, high neckline. "
+    "No accessories, no jewelry, no earrings, no glasses, no hats, no scarves. Front-facing or "
+    "slight three-quarter view, neutral even studio lighting, plain seamless background. "
+    "This is a face reference — do NOT show any distinctive costume, uniform, or outfit."
+)
+
 
 _GENDER_EN = {"남": "male", "여": "female", "male": "male", "female": "female"}
 
 
+def _face_appearance(appearance: str) -> str:
+    """외형 설명에서 얼굴/헤어 정체성만 남기고 옷차림 관련 문구는 뺀다(얼굴 전용 레퍼런스라
+    의상 묘사가 크롭에 끼어들면 안 됨). 콤마/문장 단위로 쪼개 의상 키워드가 든 조각을 버린다."""
+    if not appearance:
+        return ""
+    clothing_kw = ("옷", "의상", "입", "착용", "슈트", "정장", "셔츠", "니트", "코트", "재킷", "자켓",
+                   "티셔츠", "티", "바지", "치마", "스커트", "드레스", "후드", "패딩", "유니폼",
+                   "복장", "차림", "액세서리", "귀걸이", "목걸이", "반지", "시계", "안경", "모자",
+                   "wear", "outfit", "suit", "shirt", "dress", "jacket", "coat", "uniform")
+    parts = re.split(r"[,\n·]", appearance)
+    kept = [p.strip() for p in parts if p.strip() and not any(k in p for k in clothing_kw)]
+    return ", ".join(kept)
+
+
 def generate_character_portrait(character: dict) -> bytes:
-    """인물 카드용 상반신 인물 이미지 1장(PNG bytes). 이름·성별·나이·외형을 한 프롬프트 안에
-    같이 넣어서 넷이 서로 어긋나지 않게(예: '30대 남'인데 외형 묘사는 젊은 여성으로 나오는 식의
-    불일치 방지) — 이 넷은 한 인물의 동일한 시각적 사실이라 따로따로 생성하면 안 됨.
-    스틸컷 이미지 생성 API라 영상화 때와 달리 클로즈업 안전필터 리스크는 없음(그 필터는
-    image-to-video 단계 전용)."""
+    """인물 '얼굴 전용 고정 레퍼런스' 이미지 1장(PNG bytes). 이름·성별·나이·(옷차림을 뺀)외형을
+    한 프롬프트로 묶어 얼굴/헤어 정체성만 담고, 얼굴~어깨 크롭·중립 무지 상의·액세서리 없음으로
+    고정한다 — 이 이미지가 이후 샷 생성의 얼굴 참조로 쓰이므로 의상·소품이 들어가면 안 된다.
+    스틸컷 API라 영상화 때와 달리 클로즈업 안전필터 리스크는 없음(그 필터는 image-to-video 전용)."""
     gender_en = _GENDER_EN.get((character.get("gender") or "").strip(), "")
     age = (character.get("age") or "").strip()
-    appearance = (character.get("appearance") or "").strip()
-    # 기본 정보(성별·나이·포지션)와 "외형"을 분리해서, 외형을 별도 문장으로 강조한다 —
-    # 콤마로 다 이어붙이면 뒤에 붙은 외형이 스타일 지시에 묻혀 이미지에 잘 반영되지 않는 걸
-    # 실측. 사용자가 상세 화면에 적은 외형이 초상화에 확실히 드러나게 앞으로 끌어낸다.
+    face_appearance = _face_appearance((character.get("appearance") or "").strip())
     basics = ", ".join(filter(None, [
         gender_en,
         f"{age} years old" if age else "",
-        character.get("role", ""),
     ]))
     appearance_clause = (
-        f" Physical appearance (follow this closely): {appearance}." if appearance else ""
+        f" Face and hair identity (follow closely): {face_appearance}." if face_appearance else ""
     )
     prompt = (
-        f"Portrait of a Korean drama character, upper-body medium shot, soft cinematic lighting, "
-        f"vertical framing. Character: {character.get('name', '')} — {basics}.{appearance_clause} "
-        f"{PORTRAIT_STYLE}"
+        f"Character face reference. Subject: {character.get('name', '')} — {basics}.{appearance_clause} "
+        f"{FACE_REF_FRAMING} {PORTRAIT_STYLE}"
     )
     png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="2:3", refs=[])
     return png
@@ -570,6 +590,61 @@ def run_full_pipeline(idea: str, job_id: str, episode: int = 1) -> None:
         jobs.update(job_id, stage="합본 중")
         draft_path = compile_episode_video(work, idea, scenes, shots_by_scene, episode=episode)
 
+        jobs.update(job_id, status="done", stage="완료", video_path=draft_path)
+    except Exception as e:
+        jobs.update(job_id, status="error", stage="오류", error=str(e))
+
+
+def produce_episode_video(project: dict, episode: dict, job_id: str) -> None:
+    """스튜디오 화 하나를 영상으로 제작 — 이미 만든 대본에서 씬설계→콘티→샷분해(없으면 생성)
+    →이미지→영상→합본까지. 등록된 인물 얼굴 참조(work의 요소 레지스트리)를 그대로 써서 얼굴
+    일관성을 유지한다. 백그라운드 스레드 전제(예외는 jobs에 error로 남김)."""
+    work = project["work"]
+    num = episode["num"]
+    idea = project.get("idea") or project.get("logline") or ""
+    characters = project.get("characters", [])
+    try:
+        project_setup.ensure_project(work)
+        script = episode.get("script")
+        if not script:
+            raise RuntimeError("대본이 먼저 있어야 영상을 만들 수 있어요.")
+
+        # 씬설계 → 콘티 → 요소 등록 → 샷분해 (화 상세에서 아직 안 만들었으면 여기서 생성).
+        # 저장된 shots_by_scene은 JSON 왕복으로 키가 문자열이 될 수 있어, 항상 새로 만들어 타입을 확정한다.
+        jobs.update(job_id, stage="씬 설계 중")
+        plan_text = generate_scene_plan(script, episode=num, characters=characters)
+        scenes_plan = parsing.parse_plan_scenes(plan_text)
+        if not scenes_plan:
+            raise RuntimeError("씬 설계안에서 씬 목록을 파싱하지 못했어요.")
+        conti_full = generate_conti(script, plan_text, scenes_plan, episode=num, characters=characters)
+        scenes = parsing.split_scenes(conti_full)
+        if not scenes:
+            raise RuntimeError("콘티에서 씬 헤더를 찾지 못했어요.")
+        try:
+            extract_and_register_elements(work, conti_full)
+        except Exception:
+            pass
+        jobs.update(job_id, stage="샷 분해 중")
+        shots_by_scene = generate_shots_by_scene(scenes, work=work, characters=characters)
+
+        total_shots = sum(len(s) for s in shots_by_scene.values())
+        done = 0
+
+        def on_progress(scene_num, cut_num, msg):
+            nonlocal done
+            if msg == "완료" or msg.startswith("실패"):
+                done += 1
+            jobs.update(job_id, stage=f"영상 제작 중 ({done}/{total_shots}컷) — 씬{scene_num} 컷{cut_num}: {msg}")
+
+        for scene_num, _hdr, _body in scenes:
+            shots = shots_by_scene.get(scene_num) or []
+            if shots:
+                generate_cuts_for_scene(work, scene_num, shots, episode=num, on_progress=on_progress)
+
+        jobs.update(job_id, stage="합본 중")
+        title = f"{num}화" + (f" — {episode['subtitle']}" if episode.get("subtitle") else "")
+        draft_path = compile_episode_video(work, idea, scenes, shots_by_scene,
+                                           episode=num, episode_title=title)
         jobs.update(job_id, status="done", stage="완료", video_path=draft_path)
     except Exception as e:
         jobs.update(job_id, status="error", stage="오류", error=str(e))

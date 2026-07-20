@@ -17,7 +17,7 @@ from pipeline.orchestrator import (
     generate_character_card, generate_character_portrait, generate_conti,
     generate_episode_plan_summary, generate_episode_summary, generate_key_scene_image,
     generate_pitch_card, generate_scene_plan, generate_script, generate_shots_by_scene,
-    generate_synopsis, run_full_pipeline,
+    generate_synopsis, produce_episode_video, run_full_pipeline,
 )
 
 app = FastAPI()
@@ -340,6 +340,24 @@ def studio_generate_summary(project_id: str, num: int):
         raise HTTPException(502, f"요약 생성에 실패했어요. 잠시 후 다시 시도해주세요. ({e})")
     studio.update_episode(project_id, num, summary=summary)
     return studio.get_episode(project_id, num)
+
+
+@app.post("/api/studio/{project_id}/episodes/{num}/produce")
+def studio_produce_episode(project_id: str, num: int):
+    """이 화를 영상으로 제작(대본→...→합본). 시간이 걸리는 작업이라 백그라운드 job으로 돌리고
+    job_id를 반환 — 프론트가 /api/jobs/{id} 폴링으로 진행상황·결과 영상을 받는다."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    if not episode.get("script"):
+        raise HTTPException(400, "대본이 먼저 있어야 영상을 만들 수 있어요. (대본 AI 생성 후 다시 시도)")
+    job_id = jobs.create()
+    threading.Thread(target=produce_episode_video, args=(project, episode, job_id),
+                     daemon=True).start()
+    return {"job_id": job_id}
 
 
 @app.post("/api/studio/{project_id}/episodes/{num}/advance")

@@ -532,6 +532,18 @@ button#addEpisodeBtn {
 }
 .roster-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
 
+button#makeDramaBtn {
+  width: 100%;
+  padding: 16px;
+  border-radius: 14px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+  margin-top: 8px;
+}
+
 .modal {
   position: fixed;
   inset: 0;
