@@ -11,10 +11,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from pipeline import chat, jobs, studio
+from pipeline import chat, jobs, parsing, studio
 from pipeline.orchestrator import (
-    chat_reply, compose_idea_from_chat, generate_character_portrait, generate_key_scene_image,
-    generate_pitch_card, run_full_pipeline,
+    chat_reply, compose_idea_from_chat, generate_character_portrait, generate_conti,
+    generate_key_scene_image, generate_pitch_card, generate_scene_plan, generate_script,
+    generate_shots_by_scene, run_full_pipeline,
 )
 
 app = FastAPI()
@@ -163,8 +164,44 @@ def studio_add_episode(project_id: str):
 
 @app.post("/api/studio/{project_id}/episodes/{num}/advance")
 def studio_advance_episode(project_id: str, num: int):
-    """다음 단계(대본→씬설계→콘티→...) 진행 — 이번 빌드 범위 밖, 다음 단계에서 연결."""
-    raise HTTPException(501, "다음 단계 연결은 곧 추가돼요.")
+    """그 화의 현재 stage에서 딱 한 단계만 더 진행(대본→씬설계→콘티→샷분해). 이미지·영상·
+    합본은 시간이 걸리는 단계라 별도 job 폴링 방식으로 다음 턴에 연결 예정."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+
+    stage = episode["stage"]
+    idea = project.get("idea") or project["logline"]
+
+    if stage == "대본 대기":
+        script = generate_script(idea, project["logline"], episode=num)
+        studio.update_episode(project_id, num, script=script, stage="대본 완료")
+    elif stage == "대본 완료":
+        plan_text = generate_scene_plan(episode["script"], episode=num)
+        scenes_plan = parsing.parse_plan_scenes(plan_text)
+        if not scenes_plan:
+            raise HTTPException(500, "씬 설계안에서 씬 목록을 파싱하지 못했어요.")
+        studio.update_episode(project_id, num, plan_text=plan_text, scenes_plan=scenes_plan,
+                             stage="씬설계 완료")
+    elif stage == "씬설계 완료":
+        conti_full = generate_conti(episode["script"], episode["plan_text"],
+                                    episode["scenes_plan"], episode=num)
+        scenes = parsing.split_scenes(conti_full)
+        if not scenes:
+            raise HTTPException(500, "콘티에서 씬 헤더를 찾지 못했어요.")
+        studio.update_episode(project_id, num, conti_full=conti_full, scenes=scenes,
+                             stage="콘티 완료")
+    elif stage == "콘티 완료":
+        shots_by_scene = generate_shots_by_scene(episode["scenes"])
+        studio.update_episode(project_id, num, shots_by_scene=shots_by_scene,
+                             stage="샷분해 완료")
+    else:
+        raise HTTPException(501, f"'{stage}' 다음 단계는 아직 준비 중이에요.")
+
+    return studio.get_episode(project_id, num)
 
 
 @app.get("/api/jobs/{job_id}")

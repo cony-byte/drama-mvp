@@ -57,6 +57,7 @@ def create_project(idea: str, card: dict) -> str:
     with _LOCK:
         _PROJECTS[project_id] = {
             "work": work,
+            "idea": idea,
             "logline": card.get("logline", ""),
             "characters": characters,
             "key_scene": card.get("key_scene"),
@@ -71,6 +72,7 @@ def _new_episode(num: int) -> dict:
         "stage": STAGE_ORDER[0],
         "script": None,
         "plan_text": None,
+        "scenes_plan": None,
         "conti_full": None,
         "scenes": None,
         "shots_by_scene": None,
@@ -94,6 +96,14 @@ def add_episode(project_id: str) -> dict | None:
         ep = _new_episode(num)
         p["episodes"].append(ep)
         return ep
+
+
+def get_episode(project_id: str, num: int) -> dict | None:
+    with _LOCK:
+        p = _PROJECTS.get(project_id)
+        if not p:
+            return None
+        return next((dict(ep) for ep in p["episodes"] if ep["num"] == num), None)
 
 
 def update_episode(project_id: str, num: int, **fields) -> None:
