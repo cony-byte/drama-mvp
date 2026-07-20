@@ -20,6 +20,7 @@ const views = {
   studio: $("studioView"),
   characterDetail: $("characterDetailView"),
   episodeDetail: $("episodeDetailView"),
+  stills: $("stillsView"),
   progress: $("progressView"),
   result: $("resultView"),
   error: $("errorView"),
@@ -137,6 +138,7 @@ function updateStageList(stageText) {
 }
 
 let pollTimer = null;
+let currentJobMode = "video"; // "video" | "stills"
 
 function stopPolling() {
   if (pollTimer) clearInterval(pollTimer);
@@ -151,6 +153,12 @@ async function pollJob(jobId) {
     const job = await res.json();
     if (job.status === "running") {
       updateStageList(job.stage || "진행 중");
+    } else if (job.status === "done" && currentJobMode === "stills") {
+      stopPolling();
+      // 스틸이 화(scene_stills)에 저장됐으니 프로젝트를 다시 받아 미리보기 화면을 띄운다.
+      await loadStudio(studioProjectId);
+      renderStills();
+      showView("stills");
     } else if (job.status === "done") {
       stopPolling();
       $("resultVideo").src = `${base}${job.video_url}`;
@@ -530,30 +538,64 @@ function openEpisodeDetail(num) {
 
 $("closeEpisodeDetailBtn").addEventListener("click", () => showView("studio"));
 
+function startJob(endpoint, mode, prepMsg) {
+  const base = getApiBase();
+  return fetch(`${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/${endpoint}`,
+    { method: "POST" })
+    .then(async (res) => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+      }
+      const { job_id } = await res.json();
+      currentJobMode = mode;
+      showView("progress");
+      updateStageList(prepMsg);
+      stopPolling();
+      pollTimer = setInterval(() => pollJob(job_id), 3000);
+      pollJob(job_id);
+    });
+}
+
+// "드라마 만들기"는 곧바로 영상이 아니라 먼저 씬별 스틸컷 미리보기를 만든다(영상 만들기 전 확인).
 $("makeDramaBtn").addEventListener("click", async () => {
   const ep = currentEpisode();
   if (!ep) return;
   if (!ep.script) {
-    alert("대본이 먼저 있어야 영상을 만들 수 있어요. 대본을 AI 생성하거나 작성해주세요.");
+    alert("대본이 먼저 있어야 해요. 대본을 AI 생성하거나 작성해주세요.");
     return;
   }
-  const base = getApiBase();
   try {
-    const res = await fetch(
-      `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/produce`,
-      { method: "POST" }
-    );
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
-    }
-    const { job_id } = await res.json();
-    // 온보딩과 같은 진행/결과 화면을 재사용 — job 폴링으로 진행상황·완성 영상을 받는다.
-    showView("progress");
-    updateStageList("영상 제작 준비 중");
-    stopPolling();
-    pollTimer = setInterval(() => pollJob(job_id), 3000);
-    pollJob(job_id);
+    await startJob("preview-stills", "stills", "장면 미리보기 준비 중");
+  } catch (e) {
+    alert(`장면 미리보기 실패: ${e.message}`);
+  }
+});
+
+function renderStills() {
+  const ep = currentEpisode();
+  const list = $("stillsList");
+  list.innerHTML = "";
+  const stills = (ep && ep.scene_stills) || [];
+  if (!stills.length) {
+    list.innerHTML = `<div class="roster-empty">생성된 장면이 없어요.</div>`;
+    return;
+  }
+  for (const s of stills) {
+    const div = document.createElement("div");
+    div.className = "still-card";
+    const img = s.image ? `<img src="${s.image}" alt="${s.title || ""}">` : "";
+    div.innerHTML = `${img}<div class="still-title">${s.title || `씬 ${s.scene_num}`}</div>
+      <div class="still-caption">${s.caption || ""}</div>`;
+    list.appendChild(div);
+  }
+}
+
+$("stillsBackBtn").addEventListener("click", () => showView("episodeDetail"));
+
+$("makeVideoFromStillsBtn").addEventListener("click", async () => {
+  try {
+    await startJob("produce", "video", "영상 제작 준비 중");
   } catch (e) {
     alert(`드라마 만들기 실패: ${e.message}`);
   }

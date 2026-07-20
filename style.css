@@ -532,7 +532,7 @@ button#addEpisodeBtn {
 }
 .roster-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
 
-button#makeDramaBtn {
+button#makeDramaBtn, button#makeVideoFromStillsBtn {
   width: 100%;
   padding: 16px;
   border-radius: 14px;
@@ -542,6 +542,18 @@ button#makeDramaBtn {
   font-size: 17px;
   font-weight: 600;
   margin-top: 8px;
+}
+
+#stillsView { display: flex; flex-direction: column; gap: 10px; }
+#stillsView h2 { font-size: 18px; margin: 0; }
+#stillsList { display: flex; flex-direction: column; gap: 14px; }
+.still-card { background: var(--card); border-radius: 14px; overflow: hidden; }
+.still-card img { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; display: block; }
+.still-title { font-weight: 700; font-size: 14px; padding: 10px 14px 0; }
+.still-caption { color: var(--muted); font-size: 13px; line-height: 1.5; padding: 4px 14px 14px; }
+button#stillsBackBtn {
+  width: 100%; padding: 14px; border-radius: 14px; border: none;
+  background: #333; color: var(--text); font-size: 15px; font-weight: 600;
 }
 
 .modal {
