@@ -3,9 +3,11 @@
 in-memory 저장 패턴(스레드 락) — DB 구성은 이번 단계에서 미루고, 나중에 옮길 때 이 모듈만
 갈아끼우면 되게 저장 로직을 여기 몰아둔다."""
 import base64
+import json
 import re
 import threading
 import uuid
+from pathlib import Path
 
 import vendor.storyboard.bot.openrouter_image as oi
 
@@ -14,6 +16,34 @@ from pipeline.orchestrator import generate_synopsis
 
 _LOCK = threading.Lock()
 _PROJECTS: dict[str, dict] = {}
+
+# 프로젝트를 디스크(JSON)에 저장해 서버 재시작에도 살아남게 한다 — DB는 아직 미루되, 인메모리만
+# 쓰면 재시작 때마다 프로젝트가 날아가 "저장 실패(404)"가 나서(실사용 리포트) 최소한의 영속성을
+# 여기 둔다. 나중에 DB로 옮길 때 이 _load/_save만 갈아끼우면 된다.
+_STORE_PATH = Path(__file__).resolve().parent.parent / "data" / "studio.json"
+
+
+def _save() -> None:
+    """_LOCK을 이미 잡은 상태에서 호출한다. 전체 스냅샷을 통째로 덤프(프로젝트 수가 적은 데모라 충분)."""
+    try:
+        _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _STORE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(_PROJECTS, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_STORE_PATH)  # 원자적 교체 — 쓰는 도중 크래시해도 기존 파일이 안 깨짐
+    except Exception:
+        pass  # 저장 실패해도 인메모리 상태는 유지 — 영속성만 포기(요청 자체는 성공 처리)
+
+
+def _load() -> None:
+    if not _STORE_PATH.exists():
+        return
+    try:
+        _PROJECTS.update(json.loads(_STORE_PATH.read_text(encoding="utf-8")) or {})
+    except Exception:
+        pass
+
+
+_load()
 
 _GENDER_EN = {"남": "male", "여": "female", "male": "male", "female": "female"}
 
@@ -91,6 +121,7 @@ def create_project(idea: str, card: dict) -> str:
             "key_scene": card.get("key_scene"),
             "episodes": [_new_episode(1)],
         }
+        _save()
     return project_id
 
 
@@ -104,6 +135,7 @@ def update_project(project_id: str, **fields) -> dict | None:
         for k, v in fields.items():
             if k in allowed:
                 p[k] = v
+        _save()
         return dict(p)
 
 
@@ -125,6 +157,7 @@ def add_character(project_id: str, character: dict) -> dict | None:
         if not p:
             return None
         p["characters"].append(character)
+        _save()
         return dict(character)
 
 
@@ -140,6 +173,7 @@ def update_character(project_id: str, char_id: str, **fields) -> dict | None:
         ch.update(fields)
         work = p["work"]
         updated = dict(ch)
+        _save()
     if "image" in fields:
         try:
             _save_character_reference(work, updated)
@@ -155,6 +189,7 @@ def delete_character(project_id: str, char_id: str) -> bool:
             return False
         before = len(p["characters"])
         p["characters"] = [c for c in p["characters"] if c.get("id") != char_id]
+        _save()
         return len(p["characters"]) != before
 
 
@@ -190,6 +225,7 @@ def add_episode(project_id: str) -> dict | None:
         num = len(p["episodes"]) + 1
         ep = _new_episode(num)
         p["episodes"].append(ep)
+        _save()
         return ep
 
 
@@ -209,4 +245,5 @@ def update_episode(project_id: str, num: int, **fields) -> None:
         for ep in p["episodes"]:
             if ep["num"] == num:
                 ep.update(fields)
+                _save()
                 return

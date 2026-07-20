@@ -7,3 +7,5 @@ vendor/storyboard/data/projects/*
 vendor/storyboard/data/refs/
 *.mp4
 *.png
+data/studio.json
+data/studio.json.tmp
