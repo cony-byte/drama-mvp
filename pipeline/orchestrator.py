@@ -182,15 +182,21 @@ def generate_character_portrait(character: dict) -> bytes:
     image-to-video 단계 전용)."""
     gender_en = _GENDER_EN.get((character.get("gender") or "").strip(), "")
     age = (character.get("age") or "").strip()
-    details = ", ".join(filter(None, [
+    appearance = (character.get("appearance") or "").strip()
+    # 기본 정보(성별·나이·포지션)와 "외형"을 분리해서, 외형을 별도 문장으로 강조한다 —
+    # 콤마로 다 이어붙이면 뒤에 붙은 외형이 스타일 지시에 묻혀 이미지에 잘 반영되지 않는 걸
+    # 실측. 사용자가 상세 화면에 적은 외형이 초상화에 확실히 드러나게 앞으로 끌어낸다.
+    basics = ", ".join(filter(None, [
         gender_en,
         f"{age} years old" if age else "",
         character.get("role", ""),
-        character.get("appearance", ""),
     ]))
+    appearance_clause = (
+        f" Physical appearance (follow this closely): {appearance}." if appearance else ""
+    )
     prompt = (
         f"Portrait of a Korean drama character, upper-body medium shot, soft cinematic lighting, "
-        f"vertical framing. Character: {character.get('name', '')} — {details}. "
+        f"vertical framing. Character: {character.get('name', '')} — {basics}.{appearance_clause} "
         f"{PORTRAIT_STYLE}"
     )
     png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="2:3", refs=[])
