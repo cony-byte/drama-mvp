@@ -767,6 +767,42 @@ $("regenPortraitBtn").addEventListener("click", async () => {
   }
 });
 
+$("genCharacterBtn").addEventListener("click", async () => {
+  const name = $("charNameInput").value.trim();
+  if (!name) {
+    alert("이름을 먼저 입력해주세요.");
+    return;
+  }
+  const btn = $("genCharacterBtn");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "생성 중…";
+  try {
+    const base = getApiBase();
+    // 이미 적어둔 설명이 있으면 힌트로 같이 넘겨 방향을 준다
+    const hint = $("charDescriptionInput").value.trim();
+    const res = await fetch(`${base}/api/studio/${studioProjectId}/characters/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, hint }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    const f = await res.json();
+    // 생성 결과로 입력칸을 채운다(자동 저장 X — 사용자가 검토 후 "저장")
+    $("charGenderInput").value = f.gender || "";
+    $("charAgeInput").value = f.age || "";
+    $("charRoleInput").value = f.role || "";
+    $("charLineInput").value = f.line || "";
+    $("charAppearanceInput").value = f.appearance || "";
+    $("charDescriptionInput").value = f.description || "";
+  } catch (e) {
+    alert(`캐릭터 AI 생성 실패: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+
 $("closeCharacterDetailBtn").addEventListener("click", () => showView("studio"));
 
 $("goToStudioBtn").addEventListener("click", async () => {
