@@ -15,8 +15,9 @@ from pipeline import chat, jobs, parsing, studio
 from pipeline.orchestrator import (
     chat_reply, compose_idea_from_chat, extract_and_register_elements,
     generate_character_card, generate_character_portrait, generate_conti,
-    generate_episode_summary, generate_key_scene_image, generate_pitch_card,
-    generate_scene_plan, generate_script, generate_shots_by_scene, run_full_pipeline,
+    generate_episode_plan_summary, generate_episode_summary, generate_key_scene_image,
+    generate_pitch_card, generate_scene_plan, generate_script, generate_shots_by_scene,
+    generate_synopsis, run_full_pipeline,
 )
 
 app = FastAPI()
@@ -179,6 +180,22 @@ def studio_update(project_id: str, req: ProjectUpdateRequest):
     return project
 
 
+@app.post("/api/studio/{project_id}/generate-synopsis")
+def studio_generate_synopsis(project_id: str):
+    """전체 줄거리를 AI로 (재)생성 — 로그라인+등장인물 기반. 저장 후 프로젝트 반환."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    idea = project.get("idea") or project.get("logline", "")
+    try:
+        synopsis = generate_synopsis(idea, project.get("logline", ""),
+                                     project.get("characters", []))
+    except Exception as e:
+        raise HTTPException(502, f"전체 줄거리 생성에 실패했어요. 잠시 후 다시 시도해주세요. ({e})")
+    studio.update_project(project_id, synopsis=synopsis)
+    return studio.get_project(project_id)
+
+
 class CharacterCreateRequest(BaseModel):
     name: str
     gender: str = ""
@@ -295,20 +312,32 @@ def studio_generate_script(project_id: str, num: int):
     idea = project.get("idea") or project["logline"]
     ep_char_ids = set(episode.get("character_ids") or [])
     chars = [c for c in project["characters"] if c.get("id") in ep_char_ids] or project["characters"]
-    script = generate_script(idea, project["logline"], episode=num, characters=chars)
+    # 요약이 있으면 그걸 뼈대로 대본을 쓴다(요약 먼저 → 대본 흐름).
+    script = generate_script(idea, project["logline"], episode=num, characters=chars,
+                             summary=episode.get("summary") or "")
     studio.update_episode(project_id, num, script=script)
     return studio.get_episode(project_id, num)
 
 
 @app.post("/api/studio/{project_id}/episodes/{num}/generate-summary")
 def studio_generate_summary(project_id: str, num: int):
-    """이 화 대본을 바탕으로 요약을 AI로 (재)생성. 대본이 아직 없으면 400."""
+    """이 화 요약을 AI로 (재)생성. 대본이 이미 있으면 대본을 요약하고, 아직 없으면 전체
+    줄거리에서 '이번 화 사건'을 뽑아 요약을 먼저 만든다(요약 먼저 → 대본 흐름)."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
     episode = studio.get_episode(project_id, num)
     if not episode:
         raise HTTPException(404, "화를 찾을 수 없어요.")
-    if not episode.get("script"):
-        raise HTTPException(400, "대본이 먼저 있어야 요약을 만들 수 있어요.")
-    summary = generate_episode_summary(episode["script"])
+    try:
+        if episode.get("script"):
+            summary = generate_episode_summary(episode["script"])
+        else:
+            summary = generate_episode_plan_summary(
+                num, project.get("logline", ""), project.get("synopsis", ""),
+                project.get("characters", []))
+    except Exception as e:
+        raise HTTPException(502, f"요약 생성에 실패했어요. 잠시 후 다시 시도해주세요. ({e})")
     studio.update_episode(project_id, num, summary=summary)
     return studio.get_episode(project_id, num)
 
