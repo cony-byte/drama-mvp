@@ -68,6 +68,7 @@
 
     <h3>캐릭터</h3>
     <div id="studioRoster" class="studio-roster"></div>
+    <button id="addCharacterBtn" type="button">+ 캐릭터 추가</button>
 
     <h3>전체 줄거리</h3>
     <div id="studioSynopsis" class="pitch-block"></div>
@@ -75,6 +76,24 @@
     <h3>화 목록</h3>
     <div id="studioEpisodes" class="studio-episodes"></div>
     <button id="addEpisodeBtn" type="button">+ 새 화</button>
+  </section>
+
+  <section id="characterDetailView" class="hidden">
+    <div id="characterDetailImageBox" class="character-detail-photo-placeholder"></div>
+    <button id="regenPortraitBtn" type="button">🔁 사진 다시 생성</button>
+
+    <label>이름</label>
+    <input id="charNameInput" type="text">
+    <label>역할/설정</label>
+    <input id="charRoleInput" type="text">
+    <label>핵심 대사</label>
+    <textarea id="charLineInput" rows="2"></textarea>
+
+    <div class="pitch-actions">
+      <button id="saveCharacterBtn" type="button">✅ 저장</button>
+      <button id="deleteCharacterBtn" type="button">🗑️ 삭제</button>
+    </div>
+    <button id="closeCharacterDetailBtn" type="button">↩️ 스튜디오로 돌아가기</button>
   </section>
 
   <section id="progressView" class="hidden">

@@ -18,6 +18,7 @@ const views = {
   pitch: $("pitchView"),
   videoPrep: $("videoPrepView"),
   studio: $("studioView"),
+  characterDetail: $("characterDetailView"),
   progress: $("progressView"),
   result: $("resultView"),
   error: $("errorView"),
@@ -343,8 +344,10 @@ $("nextStageBtn").addEventListener("click", () => {
 $("videoPrepBackBtn").addEventListener("click", () => showView("pitch"));
 
 let studioProjectId = null;
+let currentStudioProject = null;
 
 function renderStudio(project) {
+  currentStudioProject = project;
   $("studioLogline").textContent = project.logline;
   $("studioSynopsis").textContent = project.synopsis || "";
 
@@ -353,6 +356,7 @@ function renderStudio(project) {
   for (const ch of project.characters || []) {
     const div = document.createElement("div");
     div.className = "roster-item";
+    div.dataset.id = ch.id;
     const img = ch.image ? `<img src="${ch.image}" alt="${ch.name}">` : "";
     div.innerHTML = `${img}<div class="roster-name">${ch.name}</div>`;
     roster.appendChild(div);
@@ -405,6 +409,119 @@ $("studioEpisodes").addEventListener("click", async (e) => {
     alert(`다음 단계 진행 실패: ${err.message}`);
   }
 });
+
+let currentCharacterId = null;
+
+function openCharacterDetail(charId) {
+  const ch = (currentStudioProject.characters || []).find((c) => c.id === charId);
+  if (!ch) return;
+  currentCharacterId = charId;
+  $("charNameInput").value = ch.name || "";
+  $("charRoleInput").value = ch.role || "";
+  $("charLineInput").value = ch.line || "";
+  $("characterDetailImageBox").innerHTML = ch.image
+    ? `<img src="${ch.image}" alt="${ch.name}">`
+    : "이미지 없음";
+  showView("characterDetail");
+}
+
+$("studioRoster").addEventListener("click", (e) => {
+  const item = e.target.closest(".roster-item[data-id]");
+  if (item) openCharacterDetail(item.dataset.id);
+});
+
+$("addCharacterBtn").addEventListener("click", async () => {
+  if (!studioProjectId) return;
+  const base = getApiBase();
+  const res = await fetch(`${base}/api/studio/${studioProjectId}/characters`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "새 캐릭터", role: "", line: "" }),
+  });
+  if (!res.ok) {
+    alert("캐릭터 추가 실패");
+    return;
+  }
+  const ch = await res.json();
+  await loadStudio(studioProjectId);
+  openCharacterDetail(ch.id);
+});
+
+$("saveCharacterBtn").addEventListener("click", async () => {
+  if (!studioProjectId || !currentCharacterId) return;
+  const base = getApiBase();
+  const res = await fetch(
+    `${base}/api/studio/${studioProjectId}/characters/${currentCharacterId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: $("charNameInput").value.trim(),
+        role: $("charRoleInput").value.trim(),
+        line: $("charLineInput").value.trim(),
+      }),
+    }
+  );
+  if (!res.ok) {
+    alert("저장 실패");
+    return;
+  }
+  await loadStudio(studioProjectId);
+  showView("studio");
+});
+
+$("deleteCharacterBtn").addEventListener("click", async () => {
+  if (!studioProjectId || !currentCharacterId) return;
+  if (!confirm("이 캐릭터를 삭제할까요?")) return;
+  const base = getApiBase();
+  const res = await fetch(
+    `${base}/api/studio/${studioProjectId}/characters/${currentCharacterId}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) {
+    alert("삭제 실패");
+    return;
+  }
+  await loadStudio(studioProjectId);
+  showView("studio");
+});
+
+$("regenPortraitBtn").addEventListener("click", async () => {
+  if (!studioProjectId || !currentCharacterId) return;
+  const btn = $("regenPortraitBtn");
+  btn.disabled = true;
+  btn.textContent = "생성 중…";
+  try {
+    const base = getApiBase();
+    const name = $("charNameInput").value.trim();
+    const role = $("charRoleInput").value.trim();
+    const portraitRes = await fetch(`${base}/api/portrait`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, role }),
+    });
+    if (!portraitRes.ok) throw new Error("이미지 생성 실패");
+    const { image } = await portraitRes.json();
+    const updateRes = await fetch(
+      `${base}/api/studio/${studioProjectId}/characters/${currentCharacterId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image }),
+      }
+    );
+    if (!updateRes.ok) throw new Error("이미지 저장 실패");
+    $("characterDetailImageBox").innerHTML = `<img src="${image}" alt="${name}">`;
+    await loadStudio(studioProjectId);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔁 사진 다시 생성";
+  }
+});
+
+$("closeCharacterDetailBtn").addEventListener("click", () => showView("studio"));
 
 $("goToStudioBtn").addEventListener("click", async () => {
   if (!currentCard) return;
