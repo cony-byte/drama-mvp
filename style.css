@@ -201,6 +201,24 @@ button#finalizeBtn { margin-top: 4px; }
   flex-direction: column;
   gap: 6px;
 }
+.character-card .char-photo {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 10px;
+  background: #000;
+}
+.character-card .char-photo-placeholder {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent-dim), var(--card));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 12px;
+}
 .character-card .char-name { font-weight: 700; font-size: 15px; }
 .character-card .char-role { color: var(--muted); font-size: 12px; }
 .character-card .char-line { font-size: 13px; line-height: 1.4; font-style: italic; }
