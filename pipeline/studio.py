@@ -206,6 +206,7 @@ def _new_episode(num: int) -> dict:
         "conti_full": None,
         "scenes": None,
         "shots_by_scene": None,
+        "scene_stills": None,  # 영상 만들기 전 씬별 대표 스틸컷 미리보기
         "cut_results": None,
         "compiled_path": None,
     }

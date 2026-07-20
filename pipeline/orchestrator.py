@@ -677,45 +677,112 @@ def run_full_pipeline(idea: str, job_id: str, episode: int = 1) -> None:
         jobs.update(job_id, status="error", stage="오류", error=str(e))
 
 
-def produce_episode_video(project: dict, episode: dict, job_id: str) -> None:
-    """스튜디오 화 하나를 영상으로 제작 — 이미 만든 대본에서 씬설계→콘티→샷분해(없으면 생성)
-    →이미지→영상→합본까지. 등록된 인물 얼굴 참조(work의 요소 레지스트리)를 그대로 써서 얼굴
-    일관성을 유지한다. 백그라운드 스레드 전제(예외는 jobs에 error로 남김)."""
+def _norm_scenes(scenes):
+    """JSON 왕복으로 튜플→리스트가 된 scenes를 (int, str, str) 튜플로 정규화."""
+    return [(int(s[0]), s[1], s[2]) for s in scenes]
+
+
+def _norm_shots(sbs):
+    """JSON 왕복으로 문자열이 된 shots_by_scene 키를 int로 정규화."""
+    return {int(k): v for k, v in (sbs or {}).items()}
+
+
+def _project_mood(project: dict) -> str:
+    return " · ".join(x for x in [project.get("logline", ""),
+                                  (project.get("synopsis") or "")[:150]] if x)
+
+
+def _prepare_scenes_and_shots(project, episode, job_id, save_fn=None):
+    """이 화의 (scenes, shots_by_scene)를 준비. 이미 만들어 저장돼 있으면(스틸 미리보기에서 생성)
+    그대로 재사용해 두 번 만들지 않는다 — 미리보기 스틸과 실제 영상의 컷이 일치하게. 없으면
+    씬설계→콘티→요소 등록·고정→샷분해를 새로 만들고 save_fn으로 화에 저장한다."""
+    work = project["work"]
+    num = episode["num"]
+    characters = project.get("characters", [])
+    if episode.get("scenes") and episode.get("shots_by_scene"):
+        return _norm_scenes(episode["scenes"]), _norm_shots(episode["shots_by_scene"])
+
+    script = episode.get("script")
+    if not script:
+        raise RuntimeError("대본이 먼저 있어야 해요.")
+    jobs.update(job_id, stage="씬 설계 중")
+    plan_text = generate_scene_plan(script, episode=num, characters=characters)
+    scenes_plan = parsing.parse_plan_scenes(plan_text)
+    if not scenes_plan:
+        raise RuntimeError("씬 설계안에서 씬 목록을 파싱하지 못했어요.")
+    conti_full = generate_conti(script, plan_text, scenes_plan, episode=num, characters=characters)
+    scenes = parsing.split_scenes(conti_full)
+    if not scenes:
+        raise RuntimeError("콘티에서 씬 헤더를 찾지 못했어요.")
+    try:
+        extract_and_register_elements(work, conti_full)
+    except Exception:
+        pass
+    # 장소·의상·소품도 얼굴처럼 고정 레퍼런스 이미지를 만들어 요소 id로 등록 — 이후 샷 생성이
+    # shot_refs로 이 이미지들을 물어 배경·의상이 컷마다 일관되게 유지된다.
+    jobs.update(job_id, stage="배경·의상 고정 중")
+    try:
+        fix_element_references(work, mood=_project_mood(project), conti_full=conti_full)
+    except Exception:
+        pass
+    jobs.update(job_id, stage="샷 분해 중")
+    shots_by_scene = generate_shots_by_scene(scenes, work=work, characters=characters)
+    if save_fn:
+        save_fn(plan_text=plan_text, conti_full=conti_full, scenes=scenes,
+                shots_by_scene=shots_by_scene)
+    return scenes, shots_by_scene
+
+
+def _representative_shot(shots: list[dict]) -> dict | None:
+    """씬의 '주요 장면' 스틸용 대표 샷 — 등장인물이 가장 많은(핵심 상호작용) 샷, 동률이면 첫 샷."""
+    if not shots:
+        return None
+    return max(shots, key=lambda s: (len(s.get("characters") or []), -s.get("n", 0)))
+
+
+def generate_scene_stills(project: dict, episode: dict, job_id: str, save_fn=None) -> None:
+    """영상 만들기 전 미리보기 — 씬별로 대표 스틸컷 한 장씩 생성해 화에 저장한다(영상화·전체 컷
+    생성은 안 함). 등록된 인물 얼굴·배경·의상 레퍼런스를 그대로 써서 실제 영상과 톤이 이어진다."""
+    work = project["work"]
+    num = episode["num"]
+    try:
+        project_setup.ensure_project(work)
+        scenes, shots_by_scene = _prepare_scenes_and_shots(project, episode, job_id, save_fn=save_fn)
+        stills = []
+        total = len(scenes)
+        for i, (scene_num, hdr, _body) in enumerate(scenes, 1):
+            jobs.update(job_id, stage=f"장면 스틸 생성 중 ({i}/{total}) — 씬{scene_num}")
+            shot = _representative_shot(shots_by_scene.get(scene_num) or [])
+            if not shot:
+                continue
+            try:
+                png, _cost = generate_image_for_shot(shot, work=work)
+                stills.append({
+                    "scene_num": scene_num,
+                    "title": (hdr or f"씬 {scene_num}").strip(),
+                    "caption": shot.get("caption", ""),
+                    "image": oi.png_data_url(png),
+                })
+            except Exception:
+                pass  # 실패한 씬은 건너뜀 — 나머지 스틸은 계속 생성
+        if save_fn:
+            save_fn(scene_stills=stills)
+        jobs.update(job_id, status="done", stage="완료", stills_ready=True)
+    except Exception as e:
+        jobs.update(job_id, status="error", stage="오류", error=str(e))
+
+
+def produce_episode_video(project: dict, episode: dict, job_id: str, save_fn=None) -> None:
+    """스튜디오 화 하나를 영상으로 제작 — 스틸 미리보기에서 만든 씬·샷이 있으면 재사용, 없으면
+    새로 만들고 이미지→영상→합본까지. 백그라운드 스레드 전제(예외는 jobs에 error로 남김)."""
     work = project["work"]
     num = episode["num"]
     idea = project.get("idea") or project.get("logline") or ""
-    characters = project.get("characters", [])
     try:
         project_setup.ensure_project(work)
-        script = episode.get("script")
-        if not script:
+        if not episode.get("script"):
             raise RuntimeError("대본이 먼저 있어야 영상을 만들 수 있어요.")
-
-        # 씬설계 → 콘티 → 요소 등록 → 샷분해 (화 상세에서 아직 안 만들었으면 여기서 생성).
-        # 저장된 shots_by_scene은 JSON 왕복으로 키가 문자열이 될 수 있어, 항상 새로 만들어 타입을 확정한다.
-        jobs.update(job_id, stage="씬 설계 중")
-        plan_text = generate_scene_plan(script, episode=num, characters=characters)
-        scenes_plan = parsing.parse_plan_scenes(plan_text)
-        if not scenes_plan:
-            raise RuntimeError("씬 설계안에서 씬 목록을 파싱하지 못했어요.")
-        conti_full = generate_conti(script, plan_text, scenes_plan, episode=num, characters=characters)
-        scenes = parsing.split_scenes(conti_full)
-        if not scenes:
-            raise RuntimeError("콘티에서 씬 헤더를 찾지 못했어요.")
-        try:
-            extract_and_register_elements(work, conti_full)
-        except Exception:
-            pass
-        # 장소·의상·소품도 얼굴처럼 고정 레퍼런스 이미지를 만들어 요소 id로 등록 —
-        # 이후 샷 생성이 shot_refs로 이 이미지들을 물어 배경·의상이 컷마다 일관되게 유지된다.
-        jobs.update(job_id, stage="배경·의상 고정 중")
-        try:
-            mood = " · ".join(x for x in [project.get("logline", ""), project.get("synopsis", "")[:150]] if x)
-            fix_element_references(work, mood=mood, conti_full=conti_full)
-        except Exception:
-            pass  # 요소 이미지 고정 실패해도 영상 제작 자체는 계속(텍스트 이름 재사용으로 최소 일관성)
-        jobs.update(job_id, stage="샷 분해 중")
-        shots_by_scene = generate_shots_by_scene(scenes, work=work, characters=characters)
+        scenes, shots_by_scene = _prepare_scenes_and_shots(project, episode, job_id, save_fn=save_fn)
 
         total_shots = sum(len(s) for s in shots_by_scene.values())
         done = 0

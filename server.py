@@ -16,8 +16,8 @@ from pipeline.orchestrator import (
     chat_reply, compose_idea_from_chat, extract_and_register_elements,
     generate_character_card, generate_character_portrait, generate_conti,
     generate_episode_plan_summary, generate_episode_summary, generate_key_scene_image,
-    generate_pitch_card, generate_scene_plan, generate_script, generate_shots_by_scene,
-    generate_synopsis, produce_episode_video, run_full_pipeline,
+    generate_pitch_card, generate_scene_plan, generate_scene_stills, generate_script,
+    generate_shots_by_scene, generate_synopsis, produce_episode_video, run_full_pipeline,
 )
 
 app = FastAPI()
@@ -342,6 +342,31 @@ def studio_generate_summary(project_id: str, num: int):
     return studio.get_episode(project_id, num)
 
 
+def _episode_save_fn(project_id: str, num: int):
+    """백그라운드 job이 생성한 씬·샷·스틸을 그 화에 저장하는 콜백(orchestrator는 studio를
+    직접 import 못 함 — 순환참조 — 이라 서버가 콜백을 주입)."""
+    return lambda **fields: studio.update_episode(project_id, num, **fields)
+
+
+@app.post("/api/studio/{project_id}/episodes/{num}/preview-stills")
+def studio_preview_stills(project_id: str, num: int):
+    """영상 만들기 전 미리보기 — 씬별 대표 스틸컷을 한 장씩 생성하는 백그라운드 job. 완료되면
+    화의 scene_stills에 저장된다(프론트는 job 완료 후 프로젝트를 다시 받아 스틸을 보여준다)."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    if not episode.get("script"):
+        raise HTTPException(400, "대본이 먼저 있어야 장면 미리보기를 만들 수 있어요.")
+    job_id = jobs.create()
+    threading.Thread(target=generate_scene_stills,
+                     args=(project, episode, job_id, _episode_save_fn(project_id, num)),
+                     daemon=True).start()
+    return {"job_id": job_id}
+
+
 @app.post("/api/studio/{project_id}/episodes/{num}/produce")
 def studio_produce_episode(project_id: str, num: int):
     """이 화를 영상으로 제작(대본→...→합본). 시간이 걸리는 작업이라 백그라운드 job으로 돌리고
@@ -355,7 +380,8 @@ def studio_produce_episode(project_id: str, num: int):
     if not episode.get("script"):
         raise HTTPException(400, "대본이 먼저 있어야 영상을 만들 수 있어요. (대본 AI 생성 후 다시 시도)")
     job_id = jobs.create()
-    threading.Thread(target=produce_episode_video, args=(project, episode, job_id),
+    threading.Thread(target=produce_episode_video,
+                     args=(project, episode, job_id, _episode_save_fn(project_id, num)),
                      daemon=True).start()
     return {"job_id": job_id}
 
