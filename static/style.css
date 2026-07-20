@@ -379,7 +379,7 @@ button#addCharacterBtn, button#addEpisodeBtn {
   gap: 10px;
 }
 #characterDetailView label { font-size: 13px; color: var(--muted); margin-top: 4px; }
-#characterDetailView input {
+#characterDetailView input, #characterDetailView select {
   width: 100%;
   padding: 14px;
   border-radius: 12px;
@@ -388,6 +388,11 @@ button#addCharacterBtn, button#addEpisodeBtn {
   color: var(--text);
   font-size: 15px;
 }
+.char-row {
+  display: flex;
+  gap: 10px;
+}
+.char-row > div { flex: 1; }
 .character-detail-photo-placeholder {
   width: 100%;
   max-width: 240px;

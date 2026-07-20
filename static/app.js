@@ -417,8 +417,12 @@ function openCharacterDetail(charId) {
   if (!ch) return;
   currentCharacterId = charId;
   $("charNameInput").value = ch.name || "";
+  $("charGenderInput").value = ch.gender || "";
+  $("charAgeInput").value = ch.age || "";
   $("charRoleInput").value = ch.role || "";
   $("charLineInput").value = ch.line || "";
+  $("charAppearanceInput").value = ch.appearance || "";
+  $("charDescriptionInput").value = ch.description || "";
   $("characterDetailImageBox").innerHTML = ch.image
     ? `<img src="${ch.image}" alt="${ch.name}">`
     : "이미지 없음";
@@ -457,8 +461,12 @@ $("saveCharacterBtn").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: $("charNameInput").value.trim(),
+        gender: $("charGenderInput").value,
+        age: $("charAgeInput").value.trim(),
         role: $("charRoleInput").value.trim(),
         line: $("charLineInput").value.trim(),
+        appearance: $("charAppearanceInput").value.trim(),
+        description: $("charDescriptionInput").value.trim(),
       }),
     }
   );
@@ -495,10 +503,13 @@ $("regenPortraitBtn").addEventListener("click", async () => {
     const base = getApiBase();
     const name = $("charNameInput").value.trim();
     const role = $("charRoleInput").value.trim();
+    const gender = $("charGenderInput").value;
+    const age = $("charAgeInput").value.trim();
+    const appearance = $("charAppearanceInput").value.trim();
     const portraitRes = await fetch(`${base}/api/portrait`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, role }),
+      body: JSON.stringify({ name, role, gender, age, appearance }),
     });
     if (!portraitRes.ok) throw new Error("이미지 생성 실패");
     const { image } = await portraitRes.json();

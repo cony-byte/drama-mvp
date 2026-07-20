@@ -160,12 +160,26 @@ PORTRAIT_STYLE = (
 )
 
 
+_GENDER_EN = {"남": "male", "여": "female", "male": "male", "female": "female"}
+
+
 def generate_character_portrait(character: dict) -> bytes:
-    """인물 카드용 상반신 인물 이미지 1장(PNG bytes). 스틸컷 이미지 생성 API라 영상화 때와
-    달리 클로즈업 안전필터 리스크는 없음(그 필터는 image-to-video 단계 전용)."""
+    """인물 카드용 상반신 인물 이미지 1장(PNG bytes). 이름·성별·나이·외형을 한 프롬프트 안에
+    같이 넣어서 넷이 서로 어긋나지 않게(예: '30대 남'인데 외형 묘사는 젊은 여성으로 나오는 식의
+    불일치 방지) — 이 넷은 한 인물의 동일한 시각적 사실이라 따로따로 생성하면 안 됨.
+    스틸컷 이미지 생성 API라 영상화 때와 달리 클로즈업 안전필터 리스크는 없음(그 필터는
+    image-to-video 단계 전용)."""
+    gender_en = _GENDER_EN.get((character.get("gender") or "").strip(), "")
+    age = (character.get("age") or "").strip()
+    details = ", ".join(filter(None, [
+        gender_en,
+        f"{age} years old" if age else "",
+        character.get("role", ""),
+        character.get("appearance", ""),
+    ]))
     prompt = (
         f"Portrait of a Korean drama character, upper-body medium shot, soft cinematic lighting, "
-        f"vertical framing. Character: {character.get('name', '')}, {character.get('role', '')}. "
+        f"vertical framing. Character: {character.get('name', '')} — {details}. "
         f"{PORTRAIT_STYLE}"
     )
     png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="2:3", refs=[])

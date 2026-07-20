@@ -15,6 +15,8 @@ from pipeline.orchestrator import generate_synopsis
 _LOCK = threading.Lock()
 _PROJECTS: dict[str, dict] = {}
 
+_GENDER_EN = {"남": "male", "여": "female", "male": "male", "female": "female"}
+
 STAGE_ORDER = [
     "대본 대기", "대본 완료", "씬설계 완료",
     "샷분해 완료", "이미지 완료", "영상화 완료", "합본 완료",
@@ -29,8 +31,10 @@ def _safe_filename(name: str) -> str:
 
 
 def _save_character_reference(work: str, character: dict) -> None:
-    """온보딩에서 만든 인물 이미지(base64 data URL)를 요소 레지스트리 참조 파일로 저장하고
-    등록한다 — 이후 샷 이미지 생성이 이 파일을 얼굴 참조로 찾아 쓸 수 있게(oi.element_refs)."""
+    """온보딩/캐릭터 카드의 인물 이미지(base64 data URL)를 요소 레지스트리 참조 파일로 저장하고
+    등록한다 — 이후 샷 이미지 생성이 이 파일을 얼굴 참조로 찾아 쓸 수 있게(oi.element_refs).
+    성별도 같이 저장해둔다(voice_for가 이미 이 필드로 성별에 맞는 TTS 보이스를 배정하므로
+    —이름·성별·나이·외형이 이미지뿐 아니라 목소리에도 일관되게 이어지도록)."""
     image = character.get("image")
     if not image or not image.startswith("data:image"):
         return
@@ -41,7 +45,16 @@ def _save_character_reference(work: str, character: dict) -> None:
     dest_dir = oi.config.OPENROUTER_REFS_DIR / oi.canon_work(work)
     dest_dir.mkdir(parents=True, exist_ok=True)
     (dest_dir / filename).write_bytes(png)
-    oi.register_element(work, name, etype="person", filename=filename, aliases=[name])
+    elem = oi.register_element(work, name, etype="person", filename=filename, aliases=[name])
+    gender_en = _GENDER_EN.get((character.get("gender") or "").strip())
+    if gender_en:
+        with oi._ELEMENTS_LOCK:
+            elems = oi.load_elements(work)
+            for e in elems:
+                if e.get("id") == elem.get("id"):
+                    e["gender"] = gender_en
+                    break
+            oi._save_elements(work, elems)
 
 
 def create_project(idea: str, card: dict) -> str:

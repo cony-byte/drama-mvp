@@ -94,14 +94,18 @@ def chat_finalize(session_id: str):
 
 class PortraitRequest(BaseModel):
     name: str
-    role: str
+    role: str = ""
+    gender: str = ""
+    age: str = ""
+    appearance: str = ""
 
 
 @app.post("/api/portrait")
 def portrait(req: PortraitRequest):
     """인물 1명의 초상 이미지를 만들어 base64 data URL로 반환. 세션과 무관한 stateless
-    엔드포인트 — 카드 화면에서 인물별로 각각 비동기 호출한다."""
-    png = generate_character_portrait({"name": req.name, "role": req.role})
+    엔드포인트 — 카드 화면에서 인물별로 각각 비동기 호출한다. 이름·성별·나이·외형이
+    서로 어긋나지 않게 한 프롬프트 안에서 같이 반영한다(generate_character_portrait 참고)."""
+    png = generate_character_portrait(req.model_dump())
     return {"image": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}
 
 
@@ -118,8 +122,12 @@ def scene_image(req: SceneImageRequest):
 
 class CharacterModel(BaseModel):
     name: str
-    role: str = ""
-    line: str = ""
+    gender: str = ""
+    age: str = ""
+    role: str = ""       # 포지션(직업/설정)
+    line: str = ""       # 핵심대사
+    appearance: str = "" # 외형
+    description: str = "" # 설명
     image: str | None = None
 
 
@@ -156,8 +164,12 @@ def studio_get(project_id: str):
 
 class CharacterCreateRequest(BaseModel):
     name: str
+    gender: str = ""
+    age: str = ""
     role: str = ""
     line: str = ""
+    appearance: str = ""
+    description: str = ""
     image: str | None = None
 
 
@@ -171,8 +183,12 @@ def studio_add_character(project_id: str, req: CharacterCreateRequest):
 
 class CharacterUpdateRequest(BaseModel):
     name: str | None = None
+    gender: str | None = None
+    age: str | None = None
     role: str | None = None
     line: str | None = None
+    appearance: str | None = None
+    description: str | None = None
     image: str | None = None
 
 
