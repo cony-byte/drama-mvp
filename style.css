@@ -551,6 +551,14 @@ button#makeDramaBtn, button#makeVideoFromStillsBtn {
 .still-card img { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; display: block; }
 .still-title { font-weight: 700; font-size: 14px; padding: 10px 14px 0; }
 .still-caption { color: var(--muted); font-size: 13px; line-height: 1.5; padding: 4px 14px 14px; }
+.video-note {
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 14px;
+  border: 1px dashed #444;
+  border-radius: 12px;
+}
 button#stillsBackBtn {
   width: 100%; padding: 14px; border-radius: 14px; border: none;
   background: #333; color: var(--text); font-size: 15px; font-weight: 600;

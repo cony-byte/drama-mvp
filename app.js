@@ -592,14 +592,8 @@ function renderStills() {
 }
 
 $("stillsBackBtn").addEventListener("click", () => showView("episodeDetail"));
-
-$("makeVideoFromStillsBtn").addEventListener("click", async () => {
-  try {
-    await startJob("produce", "video", "영상 제작 준비 중");
-  } catch (e) {
-    alert(`드라마 만들기 실패: ${e.message}`);
-  }
-});
+// 실제 영상 제작(produce)은 이번 데모 범위에서 제외 — 스틸컷 미리보기까지만.
+// produce 엔드포인트/파이프라인은 백엔드에 그대로 있어 나중에 버튼만 다시 붙이면 됨.
 
 // 편집 후 서버 반영 → currentStudioProject 갱신 → 상세 재렌더의 공통 처리
 async function patchEpisode(body) {
