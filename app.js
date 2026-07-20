@@ -530,6 +530,35 @@ function openEpisodeDetail(num) {
 
 $("closeEpisodeDetailBtn").addEventListener("click", () => showView("studio"));
 
+$("makeDramaBtn").addEventListener("click", async () => {
+  const ep = currentEpisode();
+  if (!ep) return;
+  if (!ep.script) {
+    alert("대본이 먼저 있어야 영상을 만들 수 있어요. 대본을 AI 생성하거나 작성해주세요.");
+    return;
+  }
+  const base = getApiBase();
+  try {
+    const res = await fetch(
+      `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/produce`,
+      { method: "POST" }
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+    }
+    const { job_id } = await res.json();
+    // 온보딩과 같은 진행/결과 화면을 재사용 — job 폴링으로 진행상황·완성 영상을 받는다.
+    showView("progress");
+    updateStageList("영상 제작 준비 중");
+    stopPolling();
+    pollTimer = setInterval(() => pollJob(job_id), 3000);
+    pollJob(job_id);
+  } catch (e) {
+    alert(`드라마 만들기 실패: ${e.message}`);
+  }
+});
+
 // 편집 후 서버 반영 → currentStudioProject 갱신 → 상세 재렌더의 공통 처리
 async function patchEpisode(body) {
   const base = getApiBase();
