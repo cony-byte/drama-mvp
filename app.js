@@ -433,6 +433,30 @@ $("saveSynopsisBtn").addEventListener("click", async () => {
   }
 });
 
+$("genSynopsisBtn").addEventListener("click", async () => {
+  if (!studioProjectId) return;
+  const btn = $("genSynopsisBtn");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "생성 중…";
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/studio/${studioProjectId}/generate-synopsis`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+    }
+    renderStudio(await res.json());
+  } catch (e) {
+    alert(`전체 줄거리 AI 생성 실패: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+
 $("studioEpisodes").addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-num]");
   if (!btn || !studioProjectId) return;
