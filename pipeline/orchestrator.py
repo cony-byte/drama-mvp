@@ -212,13 +212,44 @@ def generate_conti(script: str, plan_text: str, scenes_plan: list[tuple[int, str
     return "\n\n".join(parts)
 
 
-def generate_shots_by_scene(scenes: list[tuple[int, str, str]]) -> dict[int, list[dict]]:
+ELEMENT_EXTRACT_TYPES = {"place": "places", "prop": "props", "costume": "costumes"}
+
+
+def extract_and_register_elements(work: str, conti_full: str) -> dict:
+    """상세 콘티에서 인물·장소·의상·소품을 뽑아 요소 레지스트리에 자동 등록한다(사진 없이 이름만 —
+    등록해두면 샷 분해 단계가 같은 이름을 그대로 재사용하도록 유도돼 컷마다 표현이 흔들리지 않는다).
+    사용자에게는 별도 등록 UI 없이 완전히 자동/비가시적으로 진행된다."""
+    existing = oi.load_elements(work)
+    existing_categories = sorted({
+        nm.split("-", 1)[0] for e in existing if e.get("type") == "place"
+        for nm in [e.get("display", "")] if "-" in nm
+    })
+    raw = _with_retry(sb_generator.complete,
+                      sb_prompts.element_extract_system(existing_categories or None),
+                      sb_prompts.element_extract_user(conti_full))
+    data = parsing.parse_json_object(raw)
+    for etype, key in ELEMENT_EXTRACT_TYPES.items():
+        for name in data.get(key) or []:
+            if name:
+                oi.register_element(work, name, etype=etype)
+    return data
+
+
+def generate_shots_by_scene(scenes: list[tuple[int, str, str]],
+                            work: str | None = None) -> dict[int, list[dict]]:
     """씬별 상세콘티 body를 샷 단위로 분해. 반환: {씬번호: [shot dict, ...]}.
+    work가 주어지면 등록된 장소·소품·의상 목록을 프롬프트에 같이 내려 컷마다 정식 이름/묘사가
+    반복 재사용되게 한다(요소 레지스트리 — extract_and_register_elements가 미리 채워둔 것).
     OPENROUTER_API_KEY 필요(agent 백엔드 아니라 OpenRouter chat 사용, 원본과 동일)."""
+    elems = oi.load_elements(work) if work else []
+    places = sorted({e["display"] for e in elems if e.get("type") == "place"})
+    props = sorted({e["display"] for e in elems if e.get("type") == "prop"})
+    costumes = sorted({e["display"] for e in elems if e.get("type") == "costume"})
+    system = sb_prompts.storyboard_shots_system(bible=None, places=places or None,
+                                                props=props or None, costumes=costumes or None)
     shots_by_scene = {}
     for num, _hdr, body in scenes:
-        raw = _with_retry(oi.chat, sb_prompts.storyboard_shots_system(bible=None),
-                          sb_prompts.storyboard_shots_user(body))
+        raw = _with_retry(oi.chat, system, sb_prompts.storyboard_shots_user(body))
         shots = [s for s in parsing.parse_json_array(raw) if s.get("prompt")]
         for i, s in enumerate(shots, 1):
             s["n"] = i
@@ -226,10 +257,11 @@ def generate_shots_by_scene(scenes: list[tuple[int, str, str]]) -> dict[int, lis
     return shots_by_scene
 
 
-def generate_image_for_shot(shot: dict) -> tuple[bytes, float]:
-    """샷 하나의 스틸컷 생성 → (PNG bytes, cost$). 요소 레지스트리 참조(refs)는 MVP에서
-    스킵(하드 게이트 아님 — 얼굴 일관성은 이번 데모에서 포기)."""
-    return _with_retry(oi.generate, shot["prompt"], aspect_ratio="9:16", refs=[])
+def generate_image_for_shot(shot: dict, work: str | None = None) -> tuple[bytes, float]:
+    """샷 하나의 스틸컷 생성 → (PNG bytes, cost$). work가 주어지면 요소 레지스트리(인물 얼굴·
+    장소·소품·의상 참조 이미지)를 shot_refs()로 자동 매칭해 일관성을 유지한다."""
+    refs = oi.shot_refs(work, shot) if work else []
+    return _with_retry(oi.generate, shot["prompt"], aspect_ratio="9:16", refs=refs)
 
 
 def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
@@ -260,7 +292,7 @@ def generate_cuts_for_scene(work: str, scene_num: int, shots: list[dict],
 
         try:
             notify("이미지 생성 중")
-            png, _img_cost = generate_image_for_shot(shot)
+            png, _img_cost = generate_image_for_shot(shot, work=work)
             notify("영상화 중")
             path = generate_video_for_cut(work, scene_num, cut_num, png,
                                           motion_prompt=shot.get("caption", shot["prompt"]),

@@ -13,9 +13,9 @@ from pydantic import BaseModel
 
 from pipeline import chat, jobs, parsing, studio
 from pipeline.orchestrator import (
-    chat_reply, compose_idea_from_chat, generate_character_portrait, generate_conti,
-    generate_key_scene_image, generate_pitch_card, generate_scene_plan, generate_script,
-    generate_shots_by_scene, run_full_pipeline,
+    chat_reply, compose_idea_from_chat, extract_and_register_elements,
+    generate_character_portrait, generate_conti, generate_key_scene_image, generate_pitch_card,
+    generate_scene_plan, generate_script, generate_shots_by_scene, run_full_pipeline,
 )
 
 app = FastAPI()
@@ -192,10 +192,14 @@ def studio_advance_episode(project_id: str, num: int):
         scenes = parsing.split_scenes(conti_full)
         if not scenes:
             raise HTTPException(500, "콘티에서 씬 헤더를 찾지 못했어요.")
+        try:
+            extract_and_register_elements(project["work"], conti_full)
+        except Exception:
+            pass  # 장소·소품·의상 자동 등록 실패해도 콘티 완료 자체는 막지 않음(그만큼 일관성 리스크)
         studio.update_episode(project_id, num, conti_full=conti_full, scenes=scenes,
                              stage="콘티 완료")
     elif stage == "콘티 완료":
-        shots_by_scene = generate_shots_by_scene(episode["scenes"])
+        shots_by_scene = generate_shots_by_scene(episode["scenes"], work=project["work"])
         studio.update_episode(project_id, num, shots_by_scene=shots_by_scene,
                              stage="샷분해 완료")
     else:
