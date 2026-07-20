@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """한 줄 아이디어 → 기획안 → 대본 → 씬설계 → 상세콘티 → 샷분해 (1~5단계, 텍스트만).
 이미지·영상·합본(6~8단계)은 나중에 이어붙인다. 모든 LLM/HTTP 호출은 vendor의 기존 함수 재사용."""
+import concurrent.futures
 import re
+import threading
 
 import vendor.cowriter.bot.generator as cw_generator
 import vendor.cowriter.bot.prompts as cw_prompts
@@ -522,11 +524,23 @@ def generate_shots_by_scene(scenes: list[tuple[int, str, str]], work: str | None
     return shots_by_scene
 
 
+# 컷 스틸·영상 화풍을 세미리얼리스틱으로 통일 — 샷 프롬프트에 매번 붙인다(영상은 이 스틸을
+# 입력으로 쓰므로 영상 화풍도 자동으로 따라온다). 초상화·요소 레퍼런스도 같은 세미리얼 계열이라
+# 전 단계 화풍이 일치한다.
+SEMI_REAL_SUFFIX = (
+    " Semi-realistic cinematic style, roughly 80% realism — photoreal lighting, proportion, and "
+    "depth with a subtly stylized painterly/illustrated finish. Not a flat cartoon or anime, and "
+    "not a pure photograph. No text, letters, captions, or watermark."
+)
+
+
 def generate_image_for_shot(shot: dict, work: str | None = None) -> tuple[bytes, float]:
     """샷 하나의 스틸컷 생성 → (PNG bytes, cost$). work가 주어지면 요소 레지스트리(인물 얼굴·
-    장소·소품·의상 참조 이미지)를 shot_refs()로 자동 매칭해 일관성을 유지한다."""
+    장소·소품·의상 참조 이미지)를 shot_refs()로 자동 매칭해 일관성을 유지한다.
+    프롬프트 끝에 세미리얼리스틱 화풍 지시를 붙여 컷마다 톤이 흔들리지 않게 한다."""
     refs = oi.shot_refs(work, shot) if work else []
-    return _with_retry(oi.generate, shot["prompt"], aspect_ratio="9:16", refs=refs)
+    prompt = f"{shot['prompt']}{SEMI_REAL_SUFFIX}"
+    return _with_retry(oi.generate, prompt, aspect_ratio="9:16", refs=refs)
 
 
 def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
@@ -740,34 +754,110 @@ def _representative_shot(shots: list[dict]) -> dict | None:
     return max(shots, key=lambda s: (len(s.get("characters") or []), -s.get("n", 0)))
 
 
+def _still_from_shots(work, scene_num, hdr, shots_by, snum_key) -> dict | None:
+    """씬의 대표 샷으로 스틸 1장 생성 → still dict(실패 시 None)."""
+    shot = _representative_shot(shots_by.get(snum_key) or [])
+    if not shot:
+        return None
+    try:
+        png, _cost = generate_image_for_shot(shot, work=work)
+    except Exception:
+        return None
+    return {"scene_num": scene_num, "title": (hdr or f"씬 {scene_num}").strip(),
+            "caption": shot.get("caption", ""), "image": oi.png_data_url(png)}
+
+
 def generate_scene_stills(project: dict, episode: dict, job_id: str, save_fn=None) -> None:
-    """영상 만들기 전 미리보기 — 씬별로 대표 스틸컷 한 장씩 생성해 화에 저장한다(영상화·전체 컷
-    생성은 안 함). 등록된 인물 얼굴·배경·의상 레퍼런스를 그대로 써서 실제 영상과 톤이 이어진다."""
+    """영상 만들기 전 미리보기 — 씬별 대표 스틸컷을 만든다. 씬들을 **병렬 파이프라인**으로 처리해
+    (씬1 콘티→씬1 스틸을 만드는 사이 씬2 콘티가 동시에 진행) 순차 대비 크게 빠르다. 각 씬 체인은
+    콘티→장소·의상 고정→샷분해→대표 스틸까지 독립적으로 돈다. 등록된 얼굴·배경·의상 레퍼런스를
+    그대로 써서 실제 영상과 톤이 이어진다."""
     work = project["work"]
     num = episode["num"]
+    characters = project.get("characters", [])
+    mood = _project_mood(project)
     try:
         project_setup.ensure_project(work)
-        scenes, shots_by_scene = _prepare_scenes_and_shots(project, episode, job_id, save_fn=save_fn)
-        stills = []
-        total = len(scenes)
-        for i, (scene_num, hdr, _body) in enumerate(scenes, 1):
-            jobs.update(job_id, stage=f"장면 스틸 생성 중 ({i}/{total}) — 씬{scene_num}")
-            shot = _representative_shot(shots_by_scene.get(scene_num) or [])
-            if not shot:
-                continue
-            try:
-                png, _cost = generate_image_for_shot(shot, work=work)
-                stills.append({
-                    "scene_num": scene_num,
-                    "title": (hdr or f"씬 {scene_num}").strip(),
-                    "caption": shot.get("caption", ""),
-                    "image": oi.png_data_url(png),
-                })
-            except Exception:
-                pass  # 실패한 씬은 건너뜀 — 나머지 스틸은 계속 생성
+
+        # 이미 씬·샷이 준비돼 있으면(재실행) 스틸만 병렬로 다시 만든다.
+        if episode.get("scenes") and episode.get("shots_by_scene"):
+            scenes = _norm_scenes(episode["scenes"])
+            sbs = _norm_shots(episode["shots_by_scene"])
+            done = 0
+            total = len(scenes)
+            lock = threading.Lock()
+
+            def _one(sc):
+                nonlocal done
+                st = _still_from_shots(work, sc[0], sc[1], sbs, sc[0])
+                with lock:
+                    done += 1
+                    jobs.update(job_id, stage=f"장면 만드는 중 ({done}/{total} 완료)")
+                return st
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(total or 1, 4)) as ex:
+                stills = [s for s in ex.map(_one, scenes) if s]
+            if save_fn:
+                save_fn(scene_stills=stills)
+            jobs.update(job_id, status="done", stage="완료")
+            return
+
+        script = episode.get("script")
+        if not script:
+            raise RuntimeError("대본이 먼저 있어야 해요.")
+        jobs.update(job_id, stage="씬 설계 중")
+        plan_text = generate_scene_plan(script, episode=num, characters=characters)
+        scenes_plan = parsing.parse_plan_scenes(plan_text)
+        if not scenes_plan:
+            raise RuntimeError("씬 설계안에서 씬 목록을 파싱하지 못했어요.")
+
+        total = len(scenes_plan)
+        done = 0
+        lock = threading.Lock()
+
+        def _scene_chain(item):
+            """한 씬의 전체 체인: 콘티 → 요소 등록·고정 → 샷분해 → 대표 스틸. 씬끼리 독립적이라
+            병렬 실행돼 서로 겹친다(한 씬 스틸 만드는 동안 다른 씬 콘티가 돈다)."""
+            nonlocal done
+            snum, line = item
+            conti = generate_conti(script, plan_text, [(snum, line)], episode=num,
+                                   characters=characters)
+            sc = parsing.split_scenes(conti)
+            if not sc:
+                result = None
+            else:
+                try:
+                    extract_and_register_elements(work, conti)
+                except Exception:
+                    pass
+                try:
+                    fix_element_references(work, mood=mood, conti_full=conti)
+                except Exception:
+                    pass
+                shots_by = generate_shots_by_scene(sc, work=work, characters=characters)
+                scene_tuple = sc[0]
+                still = _still_from_shots(work, snum, scene_tuple[1], shots_by, scene_tuple[0])
+                result = {"scene": scene_tuple, "conti": conti, "shots": shots_by, "still": still}
+            with lock:
+                done += 1
+                jobs.update(job_id, stage=f"장면 만드는 중 ({done}/{total} 완료)")
+            return result
+
+        jobs.update(job_id, stage=f"장면 만드는 중 (0/{total} 완료)")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(total, 4)) as ex:
+            results = [r for r in ex.map(_scene_chain, scenes_plan) if r]
+        results.sort(key=lambda r: r["scene"][0])
+
+        scenes = [r["scene"] for r in results]
+        shots_by_scene = {}
+        for r in results:
+            shots_by_scene.update(r["shots"])
+        conti_full = "\n\n".join(r["conti"] for r in results)
+        stills = [r["still"] for r in results if r["still"]]
         if save_fn:
-            save_fn(scene_stills=stills)
-        jobs.update(job_id, status="done", stage="완료", stills_ready=True)
+            save_fn(plan_text=plan_text, conti_full=conti_full, scenes=scenes,
+                    shots_by_scene=shots_by_scene, scene_stills=stills)
+        jobs.update(job_id, status="done", stage="완료")
     except Exception as e:
         jobs.update(job_id, status="error", stage="오류", error=str(e))
 
