@@ -232,6 +232,33 @@ button#finalizeBtn { margin-top: 4px; }
   font-size: 13px;
 }
 
+.key-scene {
+  background: var(--card);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.key-scene-photo, .key-scene-photo-placeholder {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  object-fit: cover;
+  background: linear-gradient(135deg, var(--accent-dim), var(--card));
+}
+.key-scene-photo-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.key-scene-lines {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .pitch-actions {
   display: flex;
   gap: 8px;

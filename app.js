@@ -186,6 +186,24 @@ async function loadCharacterPortrait(ch, imgBoxEl) {
   }
 }
 
+// 임팩트 장면 이미지도 인물 이미지와 같은 패턴 — 카드 텍스트 표시 후 따로 비동기로 불러온다.
+async function loadKeySceneImage(keyScene, imgBoxEl) {
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/scene-image`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ situation: keyScene.situation || "" }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    const { image } = await res.json();
+    keyScene.image = image;
+    imgBoxEl.outerHTML = `<img class="key-scene-photo" src="${image}" alt="1화 임팩트 장면">`;
+  } catch (e) {
+    imgBoxEl.textContent = "이미지 생성 실패";
+  }
+}
+
 function renderPitchCard(card) {
   currentCard = card;
   editing = false;
@@ -212,6 +230,19 @@ function renderPitchCard(card) {
       loadCharacterPortrait(ch, div.querySelector(".char-photo-placeholder"));
     }
   }
+
+  const keyScene = card.key_scene || {};
+  const imgBox = $("keySceneImageBox");
+  if (keyScene.image) {
+    imgBox.outerHTML = `<img id="keySceneImageBox" class="key-scene-photo" src="${keyScene.image}" alt="1화 임팩트 장면">`;
+  } else {
+    imgBox.textContent = "이미지 생성 중…";
+    imgBox.className = "key-scene-photo-placeholder";
+    loadKeySceneImage(keyScene, imgBox);
+  }
+  $("keySceneLines").innerHTML = (keyScene.lines || [])
+    .map((line) => `<div>${line}</div>`).join("");
+
   $("editPitchBtn").textContent = "✏️ 수정";
 }
 
