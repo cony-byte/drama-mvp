@@ -122,32 +122,31 @@ def generate_pitch_card(idea: str) -> dict:
     return _with_retry(_once)
 
 
+# storyboard-bot/app.py의 STILL_STYLE·_IDEALIZED_FACE_GUIDANCE(원본은 55~60% 리얼리즘 지정)를
+# 가져오되, 사용자 요청으로 리얼리즘 비율만 80%로 올림 — 그 외 "실존 인물처럼 안 보이게",
+# "사진이 아니라 스타일화된 일러스트" 지침은 그대로 유지.
+PORTRAIT_STYLE = (
+    "semi-realistic illustration style, painterly rendering, cinematic still, "
+    "natural relaxed facial expression, not stiff or uncanny, "
+    "clearly a stylized illustration, not a pure photograph, "
+    "not resembling any real celebrity or public figure. "
+    "Render at roughly 80% realism — mostly photoreal in lighting and proportion, but keep a "
+    "subtle painterly/illustrated quality with softened skin texture (not sharp photographic "
+    "pores/texture). "
+    "No text, letters, captions, subtitles, or written words anywhere in the image."
+)
+
+
 def generate_character_portrait(character: dict) -> bytes:
     """인물 카드용 상반신 인물 이미지 1장(PNG bytes). 스틸컷 이미지 생성 API라 영상화 때와
     달리 클로즈업 안전필터 리스크는 없음(그 필터는 image-to-video 단계 전용)."""
     prompt = (
-        f"Semi-realistic cinematic portrait of a Korean drama character, upper-body medium shot, "
-        f"soft cinematic lighting, photorealistic, vertical framing. Character: {character.get('name', '')}, "
-        f"{character.get('role', '')}."
+        f"Portrait of a Korean drama character, upper-body medium shot, soft cinematic lighting, "
+        f"vertical framing. Character: {character.get('name', '')}, {character.get('role', '')}. "
+        f"{PORTRAIT_STYLE}"
     )
     png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="2:3", refs=[])
     return png
-
-
-def generate_pitch_card_with_portraits(idea: str) -> dict:
-    """generate_pitch_card + 각 인물 초상 이미지(base64 data URL)까지 붙여서 반환.
-    이미지 2장을 순차 생성하므로 카드만 만들 때보다 응답이 몇 초~수십 초 더 걸린다."""
-    import base64
-
-    card = generate_pitch_card(idea)
-    for ch in card.get("characters", []):
-        try:
-            png = generate_character_portrait(ch)
-            ch["image"] = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
-        except Exception as e:
-            ch["image"] = None
-            ch["image_error"] = str(e)
-    return card
 
 
 def generate_script(idea: str, pitch: str, episode: int = 1) -> str:

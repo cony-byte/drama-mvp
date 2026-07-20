@@ -168,6 +168,24 @@ async function pollJob(jobId) {
 let currentCard = null;
 let editing = false;
 
+// 인물 이미지는 카드 텍스트와 분리해서 각자 비동기로 불러온다(화면 전환을 기다리게 안 함).
+async function loadCharacterPortrait(ch, imgBoxEl) {
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/portrait`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: ch.name || "", role: ch.role || "" }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    const { image } = await res.json();
+    ch.image = image;
+    imgBoxEl.outerHTML = `<img class="char-photo" src="${image}" alt="${ch.name || ""}">`;
+  } catch (e) {
+    imgBoxEl.textContent = "이미지 생성 실패";
+  }
+}
+
 function renderPitchCard(card) {
   currentCard = card;
   editing = false;
@@ -182,7 +200,7 @@ function renderPitchCard(card) {
     div.className = "character-card";
     const photo = ch.image
       ? `<img class="char-photo" src="${ch.image}" alt="${ch.name || ""}">`
-      : `<div class="char-photo-placeholder">이미지 생성 실패</div>`;
+      : `<div class="char-photo-placeholder">이미지 생성 중…</div>`;
     div.innerHTML = `
       ${photo}
       <div class="char-name">${ch.name || ""}</div>
@@ -190,6 +208,9 @@ function renderPitchCard(card) {
       <div class="char-line">"${ch.line || ""}"</div>
     `;
     box.appendChild(div);
+    if (!ch.image) {
+      loadCharacterPortrait(ch, div.querySelector(".char-photo-placeholder"));
+    }
   }
   $("editPitchBtn").textContent = "✏️ 수정";
 }
@@ -236,12 +257,13 @@ async function requestPitchCard() {
 }
 
 async function finalizeChat() {
-  // 지금은 로그라인+인물 카드(+인물 이미지)까지만 만들고 멈춘다(영상까지 이어지는
-  // 전체 파이프라인은 아직 안 붙임). 이미지 생성이 포함돼 텍스트만보다 시간이 더 걸린다.
+  // 지금은 로그라인+인물 카드까지만 만들고 멈춘다(영상까지 이어지는 전체 파이프라인은
+  // 아직 안 붙임). 텍스트 카드는 빠르게 오고, 화면 전환 직후 인물 이미지는 각자 따로
+  // 비동기로 채워진다(renderPitchCard 안의 loadCharacterPortrait).
   if (!sessionId) return;
   $("finalizeBtn").disabled = true;
   const original = $("finalizeBtn").textContent;
-  $("finalizeBtn").textContent = "카드+이미지 만드는 중… (몇십 초 걸려요)";
+  $("finalizeBtn").textContent = "만드는 중…";
   try {
     const card = await requestPitchCard();
     renderPitchCard(card);

@@ -2,6 +2,7 @@
 """데모용 API 서버. 로컬 Mac에서 그대로 돌리고 ngrok/Cloudflare Tunnel로 공개 URL을 붙여
 GitHub Pages/Vercel에 올린 프론트(별도 배포)가 그 URL을 호출하는 구조 — CORS는 전부 허용
 (데모 전용, 프로덕션 아님)."""
+import base64
 import threading
 
 from fastapi import FastAPI, HTTPException
@@ -12,7 +13,8 @@ from pydantic import BaseModel
 
 from pipeline import chat, jobs
 from pipeline.orchestrator import (
-    chat_reply, compose_idea_from_chat, generate_pitch_card_with_portraits, run_full_pipeline,
+    chat_reply, compose_idea_from_chat, generate_character_portrait, generate_pitch_card,
+    run_full_pipeline,
 )
 
 app = FastAPI()
@@ -78,14 +80,28 @@ def chat_continue(session_id: str, req: ChatReplyRequest):
 
 @app.post("/api/chat/{session_id}/finalize")
 def chat_finalize(session_id: str):
-    """지금은 로그라인+두 주인공 카드까지만 만들어서 보여준다(전체 기획안·영상까지 이어지는
-    파이프라인은 아직 안 붙임). "재생성"도 이 엔드포인트를 그대로 다시 호출한다 — 같은
-    채팅 이력을 기준으로 새 카드를 만드는 것뿐이라 별도 엔드포인트가 필요 없음."""
+    """텍스트 카드(로그라인+두 주인공)만 빠르게 만들어서 바로 보여준다 — 인물 이미지는
+    포함 안 함(프론트가 화면 전환 직후 /api/portrait를 따로 불러서 채워 넣음, 그래야
+    이미지 생성 때문에 화면 전환 자체가 느려지지 않는다). "재생성"도 이 엔드포인트를
+    그대로 다시 호출한다."""
     history = chat.get_history(session_id)
     if history is None:
         raise HTTPException(404, "채팅 세션을 찾을 수 없어요.")
     idea = compose_idea_from_chat(history)
-    return generate_pitch_card_with_portraits(idea)
+    return generate_pitch_card(idea)
+
+
+class PortraitRequest(BaseModel):
+    name: str
+    role: str
+
+
+@app.post("/api/portrait")
+def portrait(req: PortraitRequest):
+    """인물 1명의 초상 이미지를 만들어 base64 data URL로 반환. 세션과 무관한 stateless
+    엔드포인트 — 카드 화면에서 인물별로 각각 비동기 호출한다."""
+    png = generate_character_portrait({"name": req.name, "role": req.role})
+    return {"image": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}
 
 
 @app.get("/api/jobs/{job_id}")
