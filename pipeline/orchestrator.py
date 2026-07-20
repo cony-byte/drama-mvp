@@ -193,25 +193,62 @@ def generate_key_scene_image(situation: str) -> bytes:
     return png
 
 
-def generate_script(idea: str, pitch: str, episode: int = 1) -> str:
+def characters_bible(characters: list[dict] | None) -> dict | None:
+    """캐릭터 카드(성별·나이·포지션·외형·설정·핵심대사)를 storyboard_bible_block이 기대하는
+    바이블 스키마로 바꾼다 — 원본 봇이 이미 갖고 있던 메커니즘 재사용: 이 바이블을 씬설계·콘티
+    시스템 프롬프트에 넣어주면 "외형/의상 일관성을 이 설정에 맞춰라"라는 지시가 같이 붙어서,
+    인물 외형이 대본 이후 모든 텍스트 단계(씬설계→콘티→샷)에서 계속 반복 언급된다. 이미지 자체는
+    참조 사진(얼굴)으로 유지되지만, 참조가 없거나 참조가 못 주는 디테일(체형·눈매·즐겨입는 옷
+    스타일 등)은 이 텍스트 반복이 대신 채운다."""
+    if not characters:
+        return None
+    chars = {}
+    for c in characters:
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        chars[name] = {
+            "성별": c.get("gender", ""),
+            "나이": c.get("age", ""),
+            "포지션": c.get("role", ""),
+            "외형": c.get("appearance", ""),
+            "설정": c.get("description", ""),
+            "핵심대사": c.get("line", ""),
+        }
+    return {"characters": chars} if chars else None
+
+
+def generate_script(idea: str, pitch: str, episode: int = 1,
+                    characters: list[dict] | None = None) -> str:
+    """cw_generator.generate에 캐릭터 바이블(build_bible_block)을 그대로 넘기면 회차분배·
+    줄거리 등 우리가 안 채운 필드 때문에 FAILSAFE가 "확인필요"로 멈춰버려서(실측) — 대본
+    단계는 그 무거운 경로 대신 등장인물 이름만 직접 프롬프트에 못박아 이후 단계(씬설계·콘티)의
+    바이블과 이름이 어긋나지 않게 한다."""
+    char_lines = ""
+    if characters:
+        names = "\n".join(f"- {c.get('name')}({c.get('role', '')})"
+                          for c in characters if c.get("name"))
+        if names:
+            char_lines = f"\n\n[등장인물 — 반드시 이 이름 그대로 써라, 새 이름으로 바꾸지 마라]\n{names}"
     thread_messages = [{"role": "user",
-                         "content": f"{pitch}\n\n위 기획안을 바탕으로 {episode}화 대본을 써줘."}]
+                         "content": f"{pitch}{char_lines}\n\n위 기획안을 바탕으로 {episode}화 대본을 써줘."}]
     return _with_retry(cw_generator.generate, thread_messages, idea, bible=None,
                        target_episode=episode, kind="대본").strip()
 
 
-def generate_scene_plan(script: str, episode: int = 1) -> str:
+def generate_scene_plan(script: str, episode: int = 1,
+                        characters: list[dict] | None = None) -> str:
     return _with_retry(
         sb_generator.complete,
-        sb_prompts.storyboard_plan_system(bible=None, target_episode=episode),
+        sb_prompts.storyboard_plan_system(bible=characters_bible(characters), target_episode=episode),
         sb_prompts.storyboard_plan_user(script)).strip()
 
 
 def generate_conti(script: str, plan_text: str, scenes_plan: list[tuple[int, str]],
-                   episode: int = 1) -> str:
+                   episode: int = 1, characters: list[dict] | None = None) -> str:
     """상세 콘티. app.py의 씬 단위 병렬 호출(_gen_scene)과 같은 프롬프트 패턴이지만
     MVP는 순차 for-loop로(디버깅 쉬움, 데모 안정성 우선)."""
-    sys_prompt = sb_prompts.storyboard_system(bible=None, target_episode=episode)
+    sys_prompt = sb_prompts.storyboard_system(bible=characters_bible(characters), target_episode=episode)
     parts = []
     for num, line in scenes_plan:
         user = (
@@ -249,8 +286,8 @@ def extract_and_register_elements(work: str, conti_full: str) -> dict:
     return data
 
 
-def generate_shots_by_scene(scenes: list[tuple[int, str, str]],
-                            work: str | None = None) -> dict[int, list[dict]]:
+def generate_shots_by_scene(scenes: list[tuple[int, str, str]], work: str | None = None,
+                            characters: list[dict] | None = None) -> dict[int, list[dict]]:
     """씬별 상세콘티 body를 샷 단위로 분해. 반환: {씬번호: [shot dict, ...]}.
     work가 주어지면 등록된 장소·소품·의상 목록을 프롬프트에 같이 내려 컷마다 정식 이름/묘사가
     반복 재사용되게 한다(요소 레지스트리 — extract_and_register_elements가 미리 채워둔 것).
@@ -259,7 +296,8 @@ def generate_shots_by_scene(scenes: list[tuple[int, str, str]],
     places = sorted({e["display"] for e in elems if e.get("type") == "place"})
     props = sorted({e["display"] for e in elems if e.get("type") == "prop"})
     costumes = sorted({e["display"] for e in elems if e.get("type") == "costume"})
-    system = sb_prompts.storyboard_shots_system(bible=None, places=places or None,
+    system = sb_prompts.storyboard_shots_system(bible=characters_bible(characters),
+                                                places=places or None,
                                                 props=props or None, costumes=costumes or None)
     shots_by_scene = {}
     for num, _hdr, body in scenes:

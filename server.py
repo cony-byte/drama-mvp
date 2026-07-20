@@ -231,10 +231,12 @@ def studio_advance_episode(project_id: str, num: int):
     idea = project.get("idea") or project["logline"]
 
     if stage == "대본 대기":
-        script = generate_script(idea, project["logline"], episode=num)
+        script = generate_script(idea, project["logline"], episode=num,
+                                 characters=project["characters"])
         studio.update_episode(project_id, num, script=script, stage="대본 완료")
     elif stage == "대본 완료":
-        plan_text = generate_scene_plan(episode["script"], episode=num)
+        plan_text = generate_scene_plan(episode["script"], episode=num,
+                                        characters=project["characters"])
         scenes_plan = parsing.parse_plan_scenes(plan_text)
         if not scenes_plan:
             raise HTTPException(500, "씬 설계안에서 씬 목록을 파싱하지 못했어요.")
@@ -244,7 +246,8 @@ def studio_advance_episode(project_id: str, num: int):
         # "콘티"(상세 스토리보드)는 GPT 이미지 생성용 내부 산출물이라 사용자에게 별도 단계로
         # 안 보여준다 — 씬설계 완료에서 곧장 샷분해 완료까지 이 한 번의 호출 안에서 처리한다.
         conti_full = generate_conti(episode["script"], episode["plan_text"],
-                                    episode["scenes_plan"], episode=num)
+                                    episode["scenes_plan"], episode=num,
+                                    characters=project["characters"])
         scenes = parsing.split_scenes(conti_full)
         if not scenes:
             raise HTTPException(500, "콘티에서 씬 헤더를 찾지 못했어요.")
@@ -252,7 +255,8 @@ def studio_advance_episode(project_id: str, num: int):
             extract_and_register_elements(project["work"], conti_full)
         except Exception:
             pass  # 장소·소품·의상 자동 등록 실패해도 진행 자체는 막지 않음(그만큼 일관성 리스크)
-        shots_by_scene = generate_shots_by_scene(scenes, work=project["work"])
+        shots_by_scene = generate_shots_by_scene(scenes, work=project["work"],
+                                                 characters=project["characters"])
         studio.update_episode(project_id, num, conti_full=conti_full, scenes=scenes,
                              shots_by_scene=shots_by_scene, stage="샷분해 완료")
     else:
