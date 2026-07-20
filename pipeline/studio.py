@@ -160,7 +160,9 @@ def delete_character(project_id: str, char_id: str) -> bool:
 
 def _new_episode(num: int) -> dict:
     return {
-        "num": num,
+        "num": num,           # 화 번호 — 고정, 수정 불가
+        "subtitle": None,     # 부제목 — 사용자가 화 상세에서 편집
+        "character_ids": [],  # 이 화에 등장하는 캐릭터 id(프로젝트 캐릭터 DB 참조)
         "stage": STAGE_ORDER[0],
         "script": None,
         "summary": None,

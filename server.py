@@ -231,6 +231,53 @@ def studio_add_episode(project_id: str):
     return ep
 
 
+class EpisodeUpdateRequest(BaseModel):
+    subtitle: str | None = None
+    summary: str | None = None
+    script: str | None = None
+    character_ids: list[str] | None = None
+
+
+@app.patch("/api/studio/{project_id}/episodes/{num}")
+def studio_update_episode(project_id: str, num: int, req: EpisodeUpdateRequest):
+    if studio.get_episode(project_id, num) is None:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    studio.update_episode(project_id, num, **fields)
+    return studio.get_episode(project_id, num)
+
+
+@app.post("/api/studio/{project_id}/episodes/{num}/generate-script")
+def studio_generate_script(project_id: str, num: int):
+    """이 화 대본을 AI로 (재)생성. 이 화에 지정된 등장인물이 있으면 그 캐릭터들로,
+    없으면 프로젝트 전체 캐릭터로 바이블을 구성해 이름·외형 일관성을 맞춘다."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    idea = project.get("idea") or project["logline"]
+    ep_char_ids = set(episode.get("character_ids") or [])
+    chars = [c for c in project["characters"] if c.get("id") in ep_char_ids] or project["characters"]
+    script = generate_script(idea, project["logline"], episode=num, characters=chars)
+    studio.update_episode(project_id, num, script=script)
+    return studio.get_episode(project_id, num)
+
+
+@app.post("/api/studio/{project_id}/episodes/{num}/generate-summary")
+def studio_generate_summary(project_id: str, num: int):
+    """이 화 대본을 바탕으로 요약을 AI로 (재)생성. 대본이 아직 없으면 400."""
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    if not episode.get("script"):
+        raise HTTPException(400, "대본이 먼저 있어야 요약을 만들 수 있어요.")
+    summary = generate_episode_summary(episode["script"])
+    studio.update_episode(project_id, num, summary=summary)
+    return studio.get_episode(project_id, num)
+
+
 @app.post("/api/studio/{project_id}/episodes/{num}/advance")
 def studio_advance_episode(project_id: str, num: int):
     """그 화의 현재 stage에서 딱 한 단계만 더 진행(대본→씬설계→콘티→샷분해). 이미지·영상·

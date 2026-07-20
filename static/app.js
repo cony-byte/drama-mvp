@@ -456,23 +456,25 @@ $("studioEpisodes").addEventListener("click", (e) => {
   if (card) openEpisodeDetail(Number(card.dataset.num));
 });
 
-function openEpisodeDetail(num) {
-  const ep = (currentStudioProject.episodes || []).find((e) => e.num === num);
+let currentEpisodeNum = null;
+
+function currentEpisode() {
+  return (currentStudioProject.episodes || []).find((e) => e.num === currentEpisodeNum);
+}
+
+function renderEpisodeDetail() {
+  const ep = currentEpisode();
   if (!ep) return;
-  $("episodeDetailTitle").textContent = `${ep.num}화`;
+  $("episodeDetailTitle").textContent =
+    ep.subtitle ? `${ep.num}화 — ${ep.subtitle}` : `${ep.num}화`;
 
-  const mentioned = new Set();
-  if (ep.shots_by_scene) {
-    for (const shots of Object.values(ep.shots_by_scene)) {
-      for (const s of shots) for (const n of s.characters || []) mentioned.add(n);
-    }
-  }
-  const allChars = currentStudioProject.characters || [];
-  // 샷 분해 전이라 아직 어떤 인물이 나오는지 알 수 없으면(샷 데이터 없음) 전체 캐릭터로 대체 표시
-  const epChars = mentioned.size ? allChars.filter((c) => mentioned.has(c.name)) : allChars;
-
+  const ids = new Set(ep.character_ids || []);
+  const epChars = (currentStudioProject.characters || []).filter((c) => ids.has(c.id));
   const roster = $("episodeDetailRoster");
   roster.innerHTML = "";
+  if (!epChars.length) {
+    roster.innerHTML = `<div class="roster-empty">아직 없음 — [+ 추가]로 등장인물을 넣으세요.</div>`;
+  }
   for (const ch of epChars) {
     const div = document.createElement("div");
     div.className = "roster-item";
@@ -483,10 +485,165 @@ function openEpisodeDetail(num) {
 
   $("episodeDetailSummary").textContent = ep.summary || "(아직 없음)";
   $("episodeDetailScript").textContent = ep.script || "(아직 없음)";
+}
+
+function openEpisodeDetail(num) {
+  currentEpisodeNum = num;
+  // 편집 모드 초기화(다른 화 열 때 이전 편집 상태가 남지 않게)
+  exitSubtitleEdit();
+  exitSummaryEdit();
+  exitScriptEdit();
+  renderEpisodeDetail();
   showView("episodeDetail");
 }
 
 $("closeEpisodeDetailBtn").addEventListener("click", () => showView("studio"));
+
+// 편집 후 서버 반영 → currentStudioProject 갱신 → 상세 재렌더의 공통 처리
+async function patchEpisode(body) {
+  const base = getApiBase();
+  const res = await fetch(
+    `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+  );
+  if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+  await loadStudio(studioProjectId);
+  renderEpisodeDetail();
+}
+
+// ── 부제목 ──
+function exitSubtitleEdit() { $("subtitleEditRow").classList.add("hidden"); }
+$("editSubtitleBtn").addEventListener("click", () => {
+  $("episodeSubtitleInput").value = currentEpisode().subtitle || "";
+  $("subtitleEditRow").classList.remove("hidden");
+});
+$("cancelSubtitleBtn").addEventListener("click", exitSubtitleEdit);
+$("saveSubtitleBtn").addEventListener("click", async () => {
+  try {
+    await patchEpisode({ subtitle: $("episodeSubtitleInput").value.trim() });
+    exitSubtitleEdit();
+  } catch (e) { alert(`부제목 저장 실패: ${e.message}`); }
+});
+
+// ── 요약 (수정 / AI 생성) ──
+function exitSummaryEdit() {
+  $("episodeSummaryEdit").classList.add("hidden");
+  $("summaryEditActions").classList.add("hidden");
+  $("episodeDetailSummary").classList.remove("hidden");
+}
+$("editSummaryBtn").addEventListener("click", () => {
+  $("episodeSummaryEdit").value = currentEpisode().summary || "";
+  $("episodeDetailSummary").classList.add("hidden");
+  $("episodeSummaryEdit").classList.remove("hidden");
+  $("summaryEditActions").classList.remove("hidden");
+});
+$("cancelSummaryBtn").addEventListener("click", exitSummaryEdit);
+$("saveSummaryBtn").addEventListener("click", async () => {
+  try {
+    await patchEpisode({ summary: $("episodeSummaryEdit").value.trim() });
+    exitSummaryEdit();
+  } catch (e) { alert(`요약 저장 실패: ${e.message}`); }
+});
+$("genSummaryBtn").addEventListener("click", async () => {
+  const btn = $("genSummaryBtn");
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "생성 중…";
+  try {
+    const base = getApiBase();
+    const res = await fetch(
+      `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/generate-summary`,
+      { method: "POST" }
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+    }
+    await loadStudio(studioProjectId);
+    renderEpisodeDetail();
+  } catch (e) { alert(`요약 AI 생성 실패: ${e.message}`); }
+  finally { btn.disabled = false; btn.textContent = original; }
+});
+
+// ── 대본 (수정 / AI 생성) ──
+function exitScriptEdit() {
+  $("episodeScriptEdit").classList.add("hidden");
+  $("scriptEditActions").classList.add("hidden");
+  $("episodeDetailScript").classList.remove("hidden");
+}
+$("editScriptBtn").addEventListener("click", () => {
+  $("episodeScriptEdit").value = currentEpisode().script || "";
+  $("episodeDetailScript").classList.add("hidden");
+  $("episodeScriptEdit").classList.remove("hidden");
+  $("scriptEditActions").classList.remove("hidden");
+});
+$("cancelScriptBtn").addEventListener("click", exitScriptEdit);
+$("saveScriptBtn").addEventListener("click", async () => {
+  try {
+    await patchEpisode({ script: $("episodeScriptEdit").value.trim() });
+    exitScriptEdit();
+  } catch (e) { alert(`대본 저장 실패: ${e.message}`); }
+});
+$("genScriptBtn").addEventListener("click", async () => {
+  const btn = $("genScriptBtn");
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "생성 중…";
+  try {
+    const base = getApiBase();
+    const res = await fetch(
+      `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/generate-script`,
+      { method: "POST" }
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+    }
+    await loadStudio(studioProjectId);
+    renderEpisodeDetail();
+  } catch (e) { alert(`대본 AI 생성 실패: ${e.message}`); }
+  finally { btn.disabled = false; btn.textContent = original; }
+});
+
+// ── 등장인물 추가/삭제 팝업 ──
+function renderCharPicker() {
+  const ep = currentEpisode();
+  const ids = new Set(ep.character_ids || []);
+  const list = $("charPickerList");
+  list.innerHTML = "";
+  const chars = currentStudioProject.characters || [];
+  if (!chars.length) {
+    list.innerHTML = `<div class="roster-empty">등록된 캐릭터가 없어요. 스튜디오에서 먼저 캐릭터를 추가하세요.</div>`;
+    return;
+  }
+  for (const ch of chars) {
+    const inEp = ids.has(ch.id);
+    const row = document.createElement("div");
+    row.className = "char-picker-row";
+    row.innerHTML = `
+      <span>${ch.name}${ch.role ? ` <span class="muted">(${ch.role})</span>` : ""}</span>
+      <button type="button" data-id="${ch.id}" class="${inEp ? "in" : ""}">${inEp ? "삭제" : "추가"}</button>
+    `;
+    list.appendChild(row);
+  }
+}
+$("episodeAddCharBtn").addEventListener("click", () => {
+  renderCharPicker();
+  $("charPickerModal").classList.remove("hidden");
+});
+$("closeCharPickerBtn").addEventListener("click", () => $("charPickerModal").classList.add("hidden"));
+$("charPickerList").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-id]");
+  if (!btn) return;
+  const ep = currentEpisode();
+  const ids = new Set(ep.character_ids || []);
+  const id = btn.dataset.id;
+  if (ids.has(id)) ids.delete(id); else ids.add(id);
+  try {
+    await patchEpisode({ character_ids: [...ids] });
+    renderCharPicker();
+  } catch (err) { alert(`등장인물 변경 실패: ${err.message}`); }
+});
 
 let currentCharacterId = null;
 
