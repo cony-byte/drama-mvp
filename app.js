@@ -121,7 +121,7 @@ async function sendChatMessage() {
 }
 
 // #stageList의 data-key가 job.stage 문자열에 포함되면 그 단계까지 진행된 것으로 본다.
-const STAGE_ORDER = ["기획안", "대본", "씬 설계", "콘티", "샷 분해", "영상 제작", "합본"];
+const STAGE_ORDER = ["기획안", "대본", "씬 설계", "샷 분해", "영상 제작", "합본"];
 
 function updateStageList(stageText) {
   $("stageText").textContent = stageText;
