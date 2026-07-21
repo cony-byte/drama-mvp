@@ -695,10 +695,31 @@ button#addEpisodeBtn {
 #episodeDetailView h3 { font-size: 15px; margin: 10px 0 0; }
 #episodeDetailView h2 { font-size: 18px; margin: 0; }
 .episode-script {
-  white-space: pre-wrap;
   font-size: 14px;
   line-height: 1.6;
 }
+.script-title {
+  margin: 0;
+  padding: 2px 0 14px;
+  font-size: 18px;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--text);
+}
+.script-divider {
+  height: 1px;
+  margin: 14px 0;
+  border: 0;
+  background: rgba(255, 255, 255, 0.12);
+}
+.script-scene-heading {
+  margin-bottom: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.script-line { white-space: pre-wrap; }
+.script-spacer { height: 0.8em; }
 .head-btns { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 #subtitleEditRow { display: flex; flex-direction: column; gap: 8px; }
 #episodeSubtitleInput {

@@ -12,6 +12,47 @@ function setApiBase(v) {
 
 const $ = (id) => document.getElementById(id);
 
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function renderInlineMarkdown(text) {
+  return escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+?)\*/g, "<em>$1</em>");
+}
+
+function renderScriptMarkdown(text) {
+  const lines = String(text || "(아직 없음)").split(/\r?\n/);
+  const firstContent = lines.findIndex((line) => line.trim());
+
+  return lines.map((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return '<div class="script-spacer" aria-hidden="true"></div>';
+    if (/^-{3,}$/.test(trimmed)) return '<hr class="script-divider">';
+
+    const heading = trimmed.match(/^#{1,3}\s+(.+)$/);
+    const singleStarTitle = trimmed.match(/^\*([^*].*?)\*$/);
+    const boldLine = trimmed.match(/^\*\*(.+?)\*\*$/);
+    const emphasizedTitle = index === firstContent
+      && (singleStarTitle || (boldLine && !/^\d+\./.test(boldLine[1].trim())));
+    if (heading || emphasizedTitle) {
+      return `<h4 class="script-title">${renderInlineMarkdown((heading || emphasizedTitle)[1])}</h4>`;
+    }
+
+    const sceneHeading = boldLine;
+    if (sceneHeading) {
+      return `<div class="script-scene-heading">${renderInlineMarkdown(sceneHeading[1])}</div>`;
+    }
+    return `<div class="script-line">${renderInlineMarkdown(line)}</div>`;
+  }).join("");
+}
+
 // "AI 생성" 버튼 첫 클릭 = 의견 입력창만 펼치고 대기, 이미 펼쳐진 상태에서 클릭 = 그 값으로 진행.
 // noteInputId가 hidden이면 보여주고 포커스만 준 뒤 false(진행하지 말 것)를 반환한다.
 function revealNoteThenProceed(noteInputId) {
@@ -625,7 +666,7 @@ function renderEpisodeDetail() {
   }
 
   $("episodeDetailSummary").textContent = ep.summary || "(아직 없음)";
-  $("episodeDetailScript").textContent = ep.script || "(아직 없음)";
+  $("episodeDetailScript").innerHTML = renderScriptMarkdown(ep.script);
 }
 
 function openEpisodeDetail(num) {
@@ -700,14 +741,39 @@ function nextUnmadeSceneNum(ep) {
   return null;
 }
 
-// ★2026-07-21(사용자 지시 — 씬 대표 1컷이 아니라 컷마다 재생성/영상화 버튼을 달고, 완료 즉시
-// 합본으로 넘어가지 않게): items는 이제 씬당 여러 컷을 담은 평면 리스트다({scene_num, cut_num,
-// caption, image, video_path}). 도착한 순서·씬 번호와 무관하게 (scene_num, cut_num) 순으로
-// 정렬해 카드를 그리고, 카드마다 [🔁 재생성]/[🎬 영상화] 버튼을 붙인다.
+// 기존 프로젝트에는 예전 방식으로 만든 여러 컷이 남아 있을 수 있다. 데이터는 삭제하지 않고
+// shots_by_scene의 대표 샷 선택 기준(등장인물 수가 가장 많고, 동률이면 앞 컷)에 맞는 한 장만
+// 골라 보여준다. 새 데이터는 서버가 애초에 대표 컷 한 장만 내려준다.
+function representativePreviewItems(items) {
+  const ep = currentEpisode();
+  const shotsByScene = (ep && ep.shots_by_scene) || {};
+  const groups = new Map();
+  for (const item of items || []) {
+    const group = groups.get(item.scene_num) || [];
+    group.push(item);
+    groups.set(item.scene_num, group);
+  }
+
+  const selected = [];
+  for (const [sceneNum, group] of groups) {
+    const marked = group.find((item) => item.representative);
+    if (marked) {
+      selected.push(marked);
+      continue;
+    }
+    const shots = shotsByScene[sceneNum] || shotsByScene[String(sceneNum)] || [];
+    const representative = [...shots].sort((a, b) =>
+      ((b.characters || []).length - (a.characters || []).length)
+      || ((a.n || 0) - (b.n || 0)))[0];
+    selected.push(group.find((item) => item.cut_num === representative?.n) || group[0]);
+  }
+  return selected;
+}
+
 function renderStillsList(items, total) {
   const list = $("stillsList");
   list.innerHTML = "";
-  const cuts = [...(items || [])].sort((a, b) =>
+  const cuts = representativePreviewItems(items).sort((a, b) =>
     (a.scene_num - b.scene_num) || ((a.cut_num || 0) - (b.cut_num || 0)));
   if (!cuts.length) {
     list.innerHTML = `<div class="roster-empty">${total ? "생성 중..." : "생성된 장면이 없어요."}</div>`;

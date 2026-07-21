@@ -880,11 +880,18 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
 
 
 def generate_cuts_for_scene(work: str, scene_num: int, shots: list[dict],
-                            episode: int = 1, on_progress=None) -> list[dict]:
+                            episode: int = 1, on_progress=None,
+                            cached_stills: list[dict] | None = None) -> list[dict]:
     """씬의 모든 샷을 순서대로 이미지→영상 생성. 안전필터 등으로 실패한 컷은 그 컷만
     건너뛰고 나머지를 계속 진행(전체 실패 방지만 목적 — 재시도 고도화는 안 함, MVP 범위).
+    미리보기에서 승인된 cached_stills가 있으면 같은 씬·컷의 PNG를 재사용하고, 없는 컷만
+    새로 생성한다.
     반환: [{"cut_num", "status": "ok"|"failed", "video_path"?, "error"?}, ...]"""
     results = []
+    cached_by_cut = {
+        (s.get("scene_num"), s.get("cut_num")): s
+        for s in (cached_stills or []) if s.get("image")
+    }
     for shot in shots:
         cut_num = shot["n"]
 
@@ -893,8 +900,13 @@ def generate_cuts_for_scene(work: str, scene_num: int, shots: list[dict],
                 on_progress(scene_num, cut_num, msg)
 
         try:
-            notify("이미지 생성 중")
-            png, _img_cost = generate_image_for_shot(shot, work=work)
+            cached = cached_by_cut.get((scene_num, cut_num))
+            if cached:
+                notify("승인 스틸 재사용 중")
+                png = oi.data_url_to_png(cached["image"])
+            else:
+                notify("이미지 생성 중")
+                png, _img_cost = generate_image_for_shot(shot, work=work)
             # 영상화가 실패해도(안전필터 등) 이미 생성한 스틸은 남겨 재생성 비용 낭비를 막는다.
             try:
                 vp_store.save_still(work, scene_num=scene_num, prompt_summary=shot.get("prompt", ""),
@@ -1084,23 +1096,21 @@ def _representative_shot(shots: list[dict]) -> dict | None:
 
 
 def _cut_stills_from_shots(work: str, scene_num: int, shots: list[dict]) -> list[dict]:
-    """씬의 컷(샷) 전부에 대해 스틸을 1장씩 생성 → [{"scene_num","cut_num","caption","prompt",
-    "image","video_path"}...] (실패한 컷은 건너뜀). ★2026-07-21(사용자 지시 — 씬 대표 1컷만이
-    아니라 모든 컷을 미리보기에서 보여주고, 각 컷마다 재생성·영상화를 개별로 할 수 있게):
-    기존엔 씬당 대표 샷 1장만 만들었지만, 이제 컷 단위로 재생성/영상화 버튼을 붙여야 해서
-    씬의 모든 컷 이미지를 다 만든다."""
-    def _one(shot):
-        try:
-            png, _cost = generate_image_for_shot(shot, work=work)
-        except Exception:
-            return None
-        return {"scene_num": scene_num, "cut_num": shot.get("n"), "caption": shot.get("caption", ""),
-                "prompt": shot.get("prompt", ""), "image": oi.png_data_url(png), "video_path": None}
+    """씬의 모든 샷 중 핵심 상호작용을 담은 대표 샷 1개만 스틸로 생성한다.
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(shots) or 1, 3)) as ex:
-        results = [r for r in ex.map(_one, shots) if r]
-    results.sort(key=lambda r: r["cut_num"] or 0)
-    return results
+    미리보기 비용·대기시간을 줄이고, 전체 영상 제작 때 이 승인 스틸을 재사용한다. 대표 컷이
+    아닌 나머지 컷 이미지는 최종 영상 제작 시점에 필요한 것만 생성한다.
+    """
+    shot = _representative_shot(shots)
+    if not shot:
+        return []
+    try:
+        png, _cost = generate_image_for_shot(shot, work=work)
+    except Exception:
+        return []
+    return [{"scene_num": scene_num, "cut_num": shot.get("n"),
+             "caption": shot.get("caption", ""), "prompt": shot.get("prompt", ""),
+             "image": oi.png_data_url(png), "video_path": None, "representative": True}]
 
 
 def generate_stills_for_scene(project: dict, episode: dict, job_id: str, save_fn=None,
@@ -1164,7 +1174,7 @@ def generate_stills_for_scene(project: dict, episode: dict, job_id: str, save_fn
         jobs.update(job_id, stage=f"씬{scene_num} 샷 분해 중")
         shots_by = generate_shots_by_scene(sc, work=work, characters=characters)
         scene_tuple = sc[0]
-        jobs.update(job_id, stage=f"씬{scene_num} 스틸 생성 중")
+        jobs.update(job_id, stage=f"씬{scene_num} 대표 스틸 생성 중")
         cuts = _cut_stills_from_shots(work, scene_num, shots_by.get(scene_tuple[0]) or [])
 
         scenes = list(episode.get("scenes") or []) + [list(scene_tuple)]
@@ -1285,7 +1295,9 @@ def produce_episode_video(project: dict, episode: dict, job_id: str, save_fn=Non
         for scene_num, _hdr, _body in scenes:
             shots = shots_by_scene.get(scene_num) or []
             if shots:
-                generate_cuts_for_scene(work, scene_num, shots, episode=num, on_progress=on_progress)
+                generate_cuts_for_scene(
+                    work, scene_num, shots, episode=num, on_progress=on_progress,
+                    cached_stills=episode.get("scene_stills") or [])
 
         jobs.update(job_id, stage="합본 중")
         title = f"{num}화" + (f" — {episode['subtitle']}" if episode.get("subtitle") else "")
