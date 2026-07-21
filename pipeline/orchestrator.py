@@ -1548,9 +1548,12 @@ def _detect_face_boxes(png: bytes, W: int, H: int) -> list[tuple[int, int, int, 
     return [((W - w) // 2, int(H * 0.10), w, h)]
 
 
+_GRID_CELLS = 5  # ★2026-07-21: 사용자 요청 — 3×3에서 5×5로(선이 더 촘촘해져 얼굴 가림 강도↑)
+
+
 def _facegrid_overlay(png: bytes) -> bytes:
     """image-to-video의 실존인물 안전필터(InputImageSensitiveContentDetected)를 회피하려고
-    화면에 보이는 얼굴 전부에 빨간 3×3 격자를 얹는다(2인 이상 등장 컷에서 하나만 가리면 남은
+    화면에 보이는 얼굴 전부에 빨간 5×5 격자를 얹는다(2인 이상 등장 컷에서 하나만 가리면 남은
     얼굴 때문에 필터가 여전히 걸림 — 2026-07-21 실측). cv2로 얼굴을 자동 감지(애니풍→실사정면→
     상단중앙 폴백)해 그 위에 격자를 그린다 — 필터는 얼굴이 가려지면 통과한다."""
     from PIL import Image, ImageDraw
@@ -1560,10 +1563,10 @@ def _facegrid_overlay(png: bytes) -> bytes:
     d = ImageDraw.Draw(overlay)
     for x, y, w, h in _detect_face_boxes(png, W, H):
         x0, y0, x1, y1 = x, y, x + w, y + h
-        for i in range(4):
-            gx = round(x0 + (x1 - x0) * i / 3)
+        for i in range(_GRID_CELLS + 1):
+            gx = round(x0 + (x1 - x0) * i / _GRID_CELLS)
             d.line([(gx, y0), (gx, y1)], fill=(237, 28, 36, 255), width=max(2, W // 200))
-            gy = round(y0 + (y1 - y0) * i / 3)
+            gy = round(y0 + (y1 - y0) * i / _GRID_CELLS)
             d.line([(x0, gy), (x1, gy)], fill=(237, 28, 36, 255), width=max(2, W // 200))
     out = io.BytesIO()
     Image.alpha_composite(base, overlay).convert("RGB").save(out, format="PNG")
