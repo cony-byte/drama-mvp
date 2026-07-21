@@ -19,7 +19,7 @@ import vendor.storyboard.bot.prompts as sb_prompts
 import vendor.storyboard.bot.video_index as video_index
 import vendor.storyboard.bot.vp_store as vp_store
 
-from pipeline import jobs, parsing, project_setup
+from pipeline import jobs, parsing, project_setup, v3_schema
 
 
 def _with_retry(fn, *args, retries: int = 1, **kwargs):
@@ -488,6 +488,41 @@ def generate_scene_plan(script: str, episode: int = 1,
         _sb_complete,
         sb_prompts.storyboard_plan_system(bible=characters_bible(characters), target_episode=episode),
         sb_prompts.storyboard_plan_user(script)).strip()
+
+
+# ── v3.1 파이프라인(HANDOFF_V3_1_PIPELINE.md) 3단계: 화 전체 1~4단계 뼈대 ──────
+# 기존 generate_scene_plan(위)과 별개의 새 경로다 — 기존 shot 기반 파이프라인
+# (generate_stills_for_scene 등)은 건드리지 않고 v3.1 스키마 위에 추가로 쌓는다.
+
+def generate_episode_skeleton(script: str, episode: int = 1,
+                              characters: list[dict] | None = None) -> str:
+    """3단계: 화 전체 뼈대(씬 나누기, 등장·의상·장소·무드·소품·액션라인 확정, 클립 분할·초
+    배분) 텍스트를 생성. 이 단계는 이미지·영상은 물론 컷 상세([N초] 자세·동작 서술)도 만들지
+    않는다 — 그건 5단계(씬별 상세 블록)의 몫."""
+    return _with_retry(
+        _sb_complete,
+        sb_prompts.episode_skeleton_system(bible=characters_bible(characters)),
+        sb_prompts.episode_skeleton_user(script)).strip()
+
+
+def build_episode_skeleton(script: str, episode: int = 1,
+                          characters: list[dict] | None = None) -> tuple[list[dict], list[str]]:
+    """화 전체 뼈대를 생성 + pipeline.v3_schema로 파싱·검증까지 한 번에 수행.
+    반환: (scenes, errors). errors가 비어 있어야(구조·시간 규칙 통과) 5단계(씬별 상세 블록)로
+    넘어갈 수 있다 — 문서의 '씬 통과 조건과 상태 머신' 원칙을 화 전체 단위에 먼저 적용한 것."""
+    text = generate_episode_skeleton(script, episode=episode, characters=characters)
+    scene_tuples = parsing.split_scenes(text)
+    scenes = [v3_schema.parse_scene(hdr, body) for _, hdr, body in scene_tuples]
+    for s in scenes:
+        s["state"] = "validating"
+    errors = []
+    for s in scenes:
+        errors.extend(v3_schema.validate_skeleton_scene(s))
+    errors.extend(v3_schema.validate_episode_timing(scenes))
+    if not errors:
+        for s in scenes:
+            s["state"] = v3_schema.next_state(s["state"])  # validating → references_ready
+    return scenes, errors
 
 
 def _element_names_for_prompt(work: str | None, etype: str) -> list[str]:
