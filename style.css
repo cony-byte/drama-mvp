@@ -71,28 +71,53 @@ textarea {
   resize: vertical;
 }
 
-button#startChatBtn, button#restartBtn, button#errorRetryBtn, button#finalizeBtn {
+/* ── 공통 버튼 베이스: 모든 버튼에 일관된 감각(호버/클릭/포커스) ── */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform .12s ease, filter .12s ease, background .15s ease,
+              border-color .15s ease, box-shadow .15s ease, opacity .12s ease;
+}
+button:hover { filter: brightness(1.08); }
+button:active { transform: translateY(1px) scale(0.99); }
+button:disabled { cursor: default; filter: none !important; transform: none; opacity: 0.5; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 주요 CTA — 그라데이션 + 부드러운 그림자 */
+button#startChatBtn, button#restartBtn, button#errorRetryBtn, button#finalizeBtn,
+button#nextStageBtn, button#goToStudioBtn,
+button#makeDramaBtn, button#makeVideoFromStillsBtn {
   width: 100%;
   padding: 16px;
   border-radius: 14px;
   border: none;
-  background: var(--accent);
+  background: linear-gradient(135deg, #ff6f9c 0%, #ff4778 100%);
   color: #fff;
   font-size: 17px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  box-shadow: 0 8px 20px -8px rgba(255, 92, 138, 0.65);
 }
-button#startChatBtn:disabled, button#finalizeBtn:disabled { background: var(--accent-dim); }
+button#startChatBtn:disabled, button#finalizeBtn:disabled,
+button#nextStageBtn:disabled, button#goToStudioBtn:disabled {
+  background: var(--accent-dim);
+  box-shadow: none;
+}
 
-button#skipToStudioBtn, button#seedDemoBtn {
+/* 스튜디오 진입 — 보조 CTA(아웃라인) */
+button#openWorksBtn {
   width: 100%;
-  padding: 12px;
-  margin-top: 8px;
+  padding: 15px;
   border-radius: 14px;
-  border: 1px dashed #444;
-  background: transparent;
-  color: var(--muted);
-  font-size: 14px;
+  border: 1px solid #33333f;
+  background: var(--card);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 8px;
 }
+button#openWorksBtn:hover { border-color: var(--accent); color: var(--accent); }
 
 #chatView {
   display: flex;
@@ -199,6 +224,28 @@ button#finalizeBtn { margin-top: 4px; }
   resize: vertical;
 }
 
+/* AI 생성 버튼 옆 의견 입력 — 레이아웃을 밀지 않는 툴팁(말풍선)으로 버튼 아래에 붕 뜬다. */
+.gen-note-tooltip-anchor { position: relative; }
+.gen-note-input {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 240px;
+  max-width: 70vw;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
+  z-index: 20;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.gen-note-input::placeholder { color: var(--muted); }
+
 #charactersBox {
   display: flex;
   gap: 10px;
@@ -295,16 +342,6 @@ button#backToChatBtn {
   font-size: 15px;
   font-weight: 600;
 }
-button#nextStageBtn {
-  width: 100%;
-  padding: 16px;
-  border-radius: 14px;
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  font-size: 17px;
-  font-weight: 600;
-}
 
 #videoPrepView {
   display: flex;
@@ -333,16 +370,6 @@ button#videoPrepBackBtn {
   font-weight: 600;
 }
 
-button#goToStudioBtn {
-  width: 100%;
-  padding: 16px;
-  border-radius: 14px;
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  font-size: 17px;
-  font-weight: 600;
-}
 
 #studioView {
   display: flex;
@@ -352,20 +379,97 @@ button#goToStudioBtn {
 #studioView h3 { font-size: 15px; margin: 10px 0 0; }
 #studioLogline { font-size: 14px; }
 
+.studio-title {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  padding: 4px 0 2px;
+}
+#titleEditRow { display: flex; flex-direction: column; gap: 8px; }
+#studioTitleInput {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #2a2a33;
+  background: var(--card);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+/* 발행된(확정) 영상 목록 — 씬 스틸 캐러셀과 동일하게 가로 스크롤 스냅으로 배치. */
+.published-list {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+.published-card {
+  flex: 0 0 82%;
+  scroll-snap-align: center;
+  background: var(--card);
+  border: 1px solid #23232c;
+  border-radius: 14px;
+  overflow: hidden;
+}
+.published-card video {
+  width: 100%;
+  display: block;
+  aspect-ratio: 9 / 16;
+  max-height: 60vh;
+  object-fit: contain;
+  background: #000;
+}
+.published-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+}
+.published-title { font-size: 14px; font-weight: 600; }
+.published-del {
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  opacity: 0.6;
+}
+.published-del:hover { opacity: 1; background: rgba(255, 255, 255, 0.06); }
+
+button#publishVideoBtn {
+  width: 100%;
+  padding: 15px;
+  border-radius: 14px;
+  border: 1px solid var(--accent);
+  background: var(--accent-dim);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
 .section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  position: relative;
 }
 .section-head h3 { margin: 10px 0 0; }
 .text-btn {
-  background: none;
-  border: none;
-  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: var(--text);
   font-size: 13px;
-  padding: 4px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
 }
+.text-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .studio-roster {
   display: flex;
@@ -397,6 +501,10 @@ button#addCharacterBtn, button#addEpisodeBtn {
   background: transparent;
   color: var(--muted);
   font-size: 14px;
+}
+button#addCharacterBtn:hover, button#addEpisodeBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 #characterDetailView {
@@ -474,6 +582,78 @@ button#closeCharacterDetailBtn {
   flex-direction: column;
   gap: 8px;
 }
+.works-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+.work-card {
+  background: var(--card);
+  border: 1px solid transparent;
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: border-color .15s ease, transform .12s ease, box-shadow .15s ease;
+}
+.work-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 8px 22px -12px rgba(255, 92, 138, 0.6);
+}
+.work-card:active { transform: translateY(1px) scale(0.995); }
+.work-card-title {
+  font-weight: 700;
+  font-size: 15px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.work-card-meta .work-stage {
+  font-size: 12px;
+  color: var(--text);
+  background: var(--accent-dim);
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+.work-card-meta .work-eps {
+  font-size: 12px;
+  color: var(--muted);
+}
+.work-card-del {
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+.work-card-del:hover { opacity: 1; background: rgba(255, 255, 255, 0.06); }
+
+button#worksBackBtn {
+  width: 100%;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid #2a2a33;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+button#worksBackBtn:hover { border-color: #444; color: var(--text); }
 .episode-card {
   background: var(--card);
   border-radius: 12px;
@@ -515,11 +695,32 @@ button#addEpisodeBtn {
 #episodeDetailView h3 { font-size: 15px; margin: 10px 0 0; }
 #episodeDetailView h2 { font-size: 18px; margin: 0; }
 .episode-script {
-  white-space: pre-wrap;
   font-size: 14px;
   line-height: 1.6;
 }
-.head-btns { display: flex; gap: 4px; }
+.script-title {
+  margin: 0;
+  padding: 2px 0 14px;
+  font-size: 18px;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--text);
+}
+.script-divider {
+  height: 1px;
+  margin: 14px 0;
+  border: 0;
+  background: rgba(255, 255, 255, 0.12);
+}
+.script-scene-heading {
+  margin-bottom: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.script-line { white-space: pre-wrap; }
+.script-spacer { height: 0.8em; }
+.head-btns { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 #subtitleEditRow { display: flex; flex-direction: column; gap: 8px; }
 #episodeSubtitleInput {
   width: 100%;
@@ -532,25 +733,45 @@ button#addEpisodeBtn {
 }
 .roster-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
 
-button#makeDramaBtn, button#makeVideoFromStillsBtn {
-  width: 100%;
-  padding: 16px;
-  border-radius: 14px;
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  font-size: 17px;
-  font-weight: 600;
-  margin-top: 8px;
-}
+button#makeDramaBtn, button#makeVideoFromStillsBtn { margin-top: 8px; }
 
 #stillsView { display: flex; flex-direction: column; gap: 10px; }
 #stillsView h2 { font-size: 18px; margin: 0; }
-#stillsList { display: flex; flex-direction: column; gap: 14px; }
-.still-card { background: var(--card); border-radius: 14px; overflow: hidden; }
-.still-card img { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; display: block; }
+
+/* 씬별 스틸 — 가로로 넘겨보는 캐러셀(스크롤 스냅). 완성된 순서와 무관하게 씬 순서대로
+   슬라이드가 고정돼 있고, 아직 안 온 씬은 "(생성중...)" 플레이스홀더로 자리를 채운다. */
+#stillsList {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+.still-card {
+  flex: 0 0 82%;
+  scroll-snap-align: center;
+  background: var(--card);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.still-card img, .still-card video { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; display: block; background: #000; }
 .still-title { font-weight: 700; font-size: 14px; padding: 10px 14px 0; }
 .still-caption { color: var(--muted); font-size: 13px; line-height: 1.5; padding: 4px 14px 14px; }
+.still-cut-actions { display: flex; gap: 8px; padding: 0 14px 14px; }
+.still-cut-actions button { flex: 1; }
+
+.still-card.still-pending {
+  aspect-ratio: 9 / 16;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.still-pending-text {
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+}
 .video-note {
   text-align: center;
   color: var(--muted);

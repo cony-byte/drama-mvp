@@ -21,8 +21,20 @@
   <section id="inputView">
     <textarea id="ideaInput" placeholder="예: 재벌 3세 남주가 신분을 숨기고 편의점 아르바이트를 하다 사장 딸과 계약연애를 하게 된다" rows="4"></textarea>
     <button id="startChatBtn" type="button">이야기 시작하기</button>
-    <button id="skipToStudioBtn" type="button">🎬 온보딩 건너뛰고 바로 스튜디오로</button>
-    <button id="seedDemoBtn" type="button">🧪 더미 데이터로 스튜디오 열기</button>
+    <button id="openWorksBtn" type="button">🎬 스튜디오 열기 (내 작품)</button>
+  </section>
+
+  <section id="worksView" class="hidden">
+    <div class="section-head">
+      <h2>내 작품</h2>
+      <div class="head-btns">
+        <button id="newWorkBtn" type="button" class="text-btn">+ 새 작품</button>
+        <button id="seedDemoBtn" type="button" class="text-btn">🧪 더미</button>
+      </div>
+    </div>
+    <p class="modal-hint">이 기기에서 만든 작품 목록이에요. 카드를 누르면 이어서 작업할 수 있어요.</p>
+    <div id="worksList" class="works-list"></div>
+    <button id="worksBackBtn" type="button">↩️ 처음으로</button>
   </section>
 
   <section id="chatView" class="hidden">
@@ -66,6 +78,26 @@
   </section>
 
   <section id="studioView" class="hidden">
+    <button id="studioBackBtn" type="button" class="text-btn">↩️ 내 작품</button>
+
+    <div class="section-head">
+      <h3>제목</h3>
+      <button id="editTitleBtn" type="button" class="text-btn">✏️ 수정</button>
+    </div>
+    <div id="studioTitle" class="studio-title"></div>
+    <div id="titleEditRow" class="hidden">
+      <input id="studioTitleInput" type="text" placeholder="작품 제목">
+      <div class="pitch-actions">
+        <button id="saveTitleBtn" type="button">✅ 저장</button>
+        <button id="cancelTitleBtn" type="button">취소</button>
+      </div>
+    </div>
+
+    <div class="section-head">
+      <h3>발행된 영상</h3>
+    </div>
+    <div id="publishedList" class="published-list"></div>
+
     <h2 id="studioLogline" class="pitch-block"></h2>
 
     <h3>캐릭터</h3>
@@ -77,6 +109,7 @@
       <div class="head-btns">
         <button id="genSynopsisBtn" type="button" class="text-btn">🤖 AI 생성</button>
         <button id="editSynopsisBtn" type="button" class="text-btn">✏️ 수정</button>
+        <textarea id="synopsisNoteInput" class="gen-note-input hidden" rows="2" placeholder="AI 생성에 반영할 의견(선택) — 예: 좀 더 애틋하게"></textarea>
       </div>
     </div>
     <div id="studioSynopsis" class="pitch-block"></div>
@@ -97,7 +130,10 @@
 
     <label>이름</label>
     <input id="charNameInput" type="text">
-    <button id="genCharacterBtn" type="button">🤖 이름으로 나머지 정보 AI 생성</button>
+    <div class="gen-note-tooltip-anchor">
+      <button id="genCharacterBtn" type="button">🤖 이름으로 나머지 정보 AI 생성</button>
+      <textarea id="charHintInput" class="gen-note-input hidden" rows="2" placeholder="AI 생성에 반영할 의견(선택) — 예: 츤데레 성격으로"></textarea>
+    </div>
     <div class="char-row">
       <div>
         <label>성별</label>
@@ -152,6 +188,7 @@
       <div class="head-btns">
         <button id="genSummaryBtn" type="button" class="text-btn">🤖 AI 생성</button>
         <button id="editSummaryBtn" type="button" class="text-btn">✏️ 수정</button>
+        <textarea id="summaryNoteInput" class="gen-note-input hidden" rows="2" placeholder="AI 생성에 반영할 의견(선택)"></textarea>
       </div>
     </div>
     <div id="episodeDetailSummary" class="pitch-block"></div>
@@ -166,6 +203,7 @@
       <div class="head-btns">
         <button id="genScriptBtn" type="button" class="text-btn">🤖 AI 생성</button>
         <button id="editScriptBtn" type="button" class="text-btn">✏️ 수정</button>
+        <textarea id="scriptNoteInput" class="gen-note-input hidden" rows="2" placeholder="AI 생성에 반영할 의견(선택)"></textarea>
       </div>
     </div>
     <div id="episodeDetailScript" class="pitch-block episode-script"></div>
@@ -183,6 +221,7 @@
     <h2>장면 미리보기</h2>
     <p class="modal-hint">씬별 주요 장면을 스틸컷으로 만들었어요.</p>
     <div id="stillsList"></div>
+    <button id="nextSceneBtn" type="button" class="hidden">+ 다음 씬 만들기</button>
     <button id="makeVideoFromStillsBtn" type="button">🎬 이 장면들로 영상 만들기</button>
     <p class="video-note">컷마다 영상을 만들어 합치느라 몇 분 걸려요. 완성되면 영상이 재생됩니다.</p>
     <button id="stillsBackBtn" type="button">↩️ 화면으로 돌아가기</button>
@@ -212,6 +251,7 @@
 
   <section id="resultView" class="hidden">
     <video id="resultVideo" controls playsinline></video>
+    <button id="publishVideoBtn" type="button">💾 작품에 저장</button>
     <button id="restartBtn" type="button">다시 만들기</button>
   </section>
 
