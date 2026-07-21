@@ -882,6 +882,9 @@ def _ensure_v3_skeleton(episode: dict, script: str, num: int,
     skeleton_text, sk_scenes, sk_errors = generate_episode_skeleton_validated(
         script, episode=num, characters=characters)
     if sk_errors:
+        # 진단용: 검증 실패 시 LLM 뼈대 원문을 서버 로그로 남긴다(형식 흔들림을 눈으로 확인).
+        print("[v3 뼈대 검증 실패] errors=" + " / ".join(sk_errors) +
+              "\n----- 뼈대 원문 -----\n" + skeleton_text + "\n---------------------", flush=True)
         raise RuntimeError("화 뼈대 검증에 실패했어요: " + " / ".join(sk_errors))
     scene_lines = [[s["scene_num"], s.get("title") or ""] for s in sk_scenes
                    if s.get("scene_num") is not None]

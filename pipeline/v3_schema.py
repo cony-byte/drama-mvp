@@ -46,36 +46,43 @@ EPISODE_SECONDS_MIN, EPISODE_SECONDS_MAX = 90, 110
 _TIME_TOLERANCE = 0.5  # 블록 합과 클립 선언 초 사이 허용 오차(반올림 등)
 
 # ── 정규식 ───────────────────────────────────────────────────────────────
-SCENE_HEADER_RE = re.compile(
-    r"씬\s*(\d+)\s*[·∙•]\s*\[([^\]]+)\]\s*(?:\(([^)]+)\))?\s*[·∙•]\s*"
-    r"(?:총\s*)?(\d+(?:\.\d+)?)\s*초\s*[·∙•]\s*(.+)$"
-)
+# 구분자 문자 클래스 — LLM이 ·/∙/•/‧/・/|// 등을 섞어 써도 견디게 한다(실 출력 변동성 대응).
+_SEP = r"[·∙•‧・|/]"
 CAST_LINE_RE = re.compile(r"(?m)^등장\s*[:：]\s*(.+)$")
 CAST_ENTRY_RE = re.compile(r"([^()·]+?)\(([^/()]+)\s*/\s*의상\s*[:：]\s*([^)]+)\)")
-MOOD_LINE_RE = re.compile(r"(?m)^무드/조명\s*[:：]\s*(.+)$")
+MOOD_LINE_RE = re.compile(r"(?m)^무드/?조명\s*[:：]\s*(.+)$")
 PROP_LINE_RE = re.compile(r"(?m)^소품\s*[:：]\s*(.+)$")
 ACTION_LINE_RE = re.compile(r"(?m)^라인\s*[:：]\s*(.+)$")
+# 클립 마커: 구분자 관대 + 클립 letter 앞 구분자 -–— + 끝 ─ 선택(빠져도 인식).
 CLIP_HDR_RE = re.compile(
-    r"(?m)^[ \t]*─+\s*클립\s*([0-9]+)-([A-Za-z가-힣])\s*[·∙•]\s*"
-    r"(\d+(?:\.\d+)?)\s*초\s*[·∙•]\s*(.+?)\s*─+\s*$"
+    r"(?m)^[ \t]*─+\s*클립\s*([0-9]+)\s*[-–—]\s*([A-Za-z가-힣])\s*" + _SEP + r"\s*"
+    r"(\d+(?:\.\d+)?)\s*초\s*" + _SEP + r"\s*(.+?)\s*(?:─+\s*)?$"
 )
 BLOCK_START_RE = re.compile(r"\[(\d+(?:\.\d+)?)\s*초\]")
 ASSET_LINE_RE = re.compile(r"에셋\s*[:：]\s*(.+)")
 
 
 def parse_scene_header(header_line: str) -> dict:
-    """'씬N · [장소태그] (element_id) · 총초 · 제목' → dict. 형식이 안 맞으면 필드가 None
-    (레거시 콘티 호환 — 파싱 실패를 예외로 던지지 않는다, 상위에서 검증 오류로 취급)."""
-    m = SCENE_HEADER_RE.search(header_line or "")
-    if not m:
-        return {"scene_num": None, "location_tag": None, "location_element_id": None,
-                "declared_seconds": None, "title": None}
+    """'씬N · [장소태그] (element_id) · 총초 · 제목' → dict. LLM 출력의 구분자·표기 흔들림에
+    견디도록 하나의 엄격한 정규식 대신 필드를 독립적으로 뽑는다(씬번호·초는 검증에 쓰이는 핵심
+    필드라 특히 견고하게). 못 찾은 필드는 None(파싱 실패를 예외로 던지지 않고 상위 검증에 맡김)."""
+    line = (header_line or "").strip()
+    m_num = re.search(r"씬\s*(\d+)", line)
+    m_sec = re.search(r"(\d+(?:\.\d+)?)\s*초", line)
+    m_loc = re.search(r"\[([^\]]+)\]", line)
+    m_id = re.search(r"\(([^)]*)\)", line)
+
+    title = None
+    if m_sec:  # 제목 = 초 표기 뒤, 앞쪽 구분자/공백 제거한 나머지
+        rest = re.sub(r"^\s*[·∙•‧・|/\-–—]?\s*", "", line[m_sec.end():]).strip()
+        title = rest or None
+
     return {
-        "scene_num": int(m.group(1)),
-        "location_tag": m.group(2).strip(),
-        "location_element_id": (m.group(3) or "").strip() or None,
-        "declared_seconds": float(m.group(4)),
-        "title": m.group(5).strip(),
+        "scene_num": int(m_num.group(1)) if m_num else None,
+        "location_tag": m_loc.group(1).strip() if m_loc else None,
+        "location_element_id": ((m_id.group(1).strip() or None) if m_id else None),
+        "declared_seconds": float(m_sec.group(1)) if m_sec else None,
+        "title": title,
     }
 
 
