@@ -1224,3 +1224,69 @@ def scene_blocks_user(scene_skeleton: str, script: str,
         parts.append("\n[직전 생성이 v3.1 검증에서 아래 오류로 반려됐다 — 이 오류를 모두 고쳐 다시 "
                      "써라(특히 블록 초 합 = 클립 선언 초)]\n" + error_feedback)
     return "\n".join(parts)
+
+
+# ── v3.1 파이프라인 8단계: 클립 → 스틸/멀티샷 영상 프롬프트 렌더링 ──────────────
+# 5단계가 만든 씬 dict(pipeline.v3_schema.parse_scene)의 clips[].blocks[]를 이미지·영상 생성
+# 프롬프트 문자열로 변환하는 순수 함수들. 요소 참조(<<<id>>>)·의상 잠금·화풍 접미사는 상위
+# orchestrator(generate_image_for_shot)가 붙이므로 여기선 씬 선언 + 블록 서술만 렌더한다.
+
+def _scene_declaration_lines(scene: dict) -> list[str]:
+    """씬 공통 선언(장소·무드/조명·의상·소품·라인) — 클립마다 재해석하지 않고 공통으로 붙인다."""
+    lines = []
+    if scene.get("location_tag"):
+        loc = scene["location_tag"]
+        lines.append(f"장소: {loc}")
+    if scene.get("mood"):
+        lines.append(f"무드/조명: {scene['mood']}")
+    cast = scene.get("cast") or []
+    if cast:
+        lines.append("등장/의상: " + " · ".join(
+            f"{c.get('name')}({c.get('costume')})" for c in cast if c.get("name")))
+    if scene.get("props_raw"):
+        lines.append(f"소품: {scene['props_raw']}")
+    if scene.get("action_line_raw"):
+        lines.append(f"라인(180도): {scene['action_line_raw']}")
+    return lines
+
+
+def clip_still_prompt(scene: dict, clip: dict, block: dict) -> str:
+    """클립 대표(또는 보강) 스틸 1장의 이미지 생성 프롬프트 — 씬 공통 선언 + 그 블록의 구도 헤더 +
+    자세(정지 상태). 동작(움직임)은 스틸엔 넣지 않는다(영상 프롬프트가 담당)."""
+    from pipeline import v3_schema
+    header = block.get("header") or ""
+    pose = v3_schema.block_pose(block)
+    parts = ["[스틸컷 — 9:16 세로. 아래 구도·자세의 '정지 한 장면'을 그린다]"]
+    parts.extend(_scene_declaration_lines(scene))
+    if header:
+        parts.append(f"구도: {header}")
+    if pose:
+        parts.append(f"자세: {pose}")
+    return "\n".join(parts)
+
+
+def clip_motion_prompt(scene: dict, clip: dict) -> str:
+    """클립 하나(영상 생성 1회 단위)의 멀티샷 모션 프롬프트 — 대표 스틸을 시작 프레임으로 삼아
+    클립의 모든 블록을 순서대로 이어지는 하나의 영상으로 만든다. 각 블록의 시간·구도 전환·자세·
+    동작·소리(립싱크/off/V.O.)를 블록 서술 그대로 전달한다(문서 '영상' 절: 입력 = 대표 스틸 +
+    클립 전체 블록 콘티, 9:16, 오디오 생성 ON)."""
+    parts = [
+        "[영상 생성 — 9:16 세로, 오디오 생성 ON. 아래 블록들을 순서대로 이어지는 하나의 멀티샷 "
+        "클립으로 만든다. 시작 프레임은 입력 스틸이며 그 인물 정체성·의상·장소·조명·화면방향을 "
+        "유지한다. 각 [N초] 블록의 구도 전환·자세·동작·카메라·대사를 그 순서·타이밍대로 재현하고, "
+        "(립싱크)는 입모양을 대사와 맞추고, (off)는 화면 밖 목소리, V.O.는 입을 움직이지 않는다.]",
+    ]
+    parts.extend(_scene_declaration_lines(scene))
+    if clip.get("label"):
+        parts.append(f"클립 사건: {clip['label']} (총 {clip.get('declared_seconds')}초)")
+    parts.append("[블록 순서]")
+    for b in clip.get("blocks") or []:
+        parts.append(f"[{_fmt_sec(b.get('seconds'))}초] {b.get('text') or ''}".rstrip())
+    return "\n".join(parts)
+
+
+def _fmt_sec(v) -> str:
+    """3.0 → '3', 2.5 → '2.5' (블록 시간 표기 정리)."""
+    if v is None:
+        return "?"
+    return str(int(v)) if float(v).is_integer() else str(v)

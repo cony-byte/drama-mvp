@@ -41,7 +41,7 @@ def _scene_dir_name(scene_num: int | None) -> str:
 
 def save_still(work: str, *, scene_num: int | None, prompt_summary: str,
               png: bytes, requested_by: str | None = None, cuts: list | None = None,
-              episode: int | str | None = None) -> str | None:
+              episode: int | str | None = None, clip_id: str | None = None) -> str | None:
     """확정된 스틸컷을 <프로젝트>/outputs/stills/<N화>/<N씬>/에 컷별 개별 파일로 저장 +
     (가능하면) visual.db generations에 기록. 반환: 저장된 씬 폴더의 상대경로(프로젝트 루트
     기준). 프로젝트를 못 찾으면 None.
@@ -67,7 +67,20 @@ def save_still(work: str, *, scene_num: int | None, prompt_summary: str,
     scene_dir.mkdir(parents=True, exist_ok=True)
     rel = str((scene_dir.relative_to(proj)))
 
-    if cuts:
+    # v3.1 클립 단위 스틸: cut{n}.png 대신 clip{clip_id}.png 하나로 저장(대표/보강 스틸 앵커).
+    # meta는 클립 id 키로 병합해 다른 클립 항목을 지우지 않는다(cut 저장과 같은 원칙).
+    if clip_id is not None:
+        (scene_dir / f"clip{clip_id}.png").write_bytes(png)
+        meta_path = scene_dir / "meta.json"
+        try:
+            existing = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        except Exception:
+            existing = {}
+        if isinstance(existing, list):
+            existing = {str(m.get("n")): m for m in existing if m.get("n") is not None}
+        existing[f"clip{clip_id}"] = {"clip_id": clip_id, "prompt": prompt_summary}
+        meta_path.write_text(json.dumps(existing, ensure_ascii=False, indent=1), encoding="utf-8")
+    elif cuts:
         meta_path = scene_dir / "meta.json"
         try:
             existing = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
@@ -101,7 +114,7 @@ def _episode_dir_name(episode: int | str | None) -> str:
 
 
 def save_video(work: str, *, scene_num: int | None, cut_num: int | None, url: str,
-              episode: int | str | None = None,
+              episode: int | str | None = None, clip_id: str | None = None,
               prompt_summary: str = "", application: str = "", requested_by: str | None = None,
               cost: float = 0.0, timeout: int = 120) -> str | None:
     """완성된 영상(URL)을 <프로젝트>/outputs/videos/<화>/에 로컬 mp4로 다운로드해 저장 +
@@ -120,7 +133,9 @@ def save_video(work: str, *, scene_num: int | None, cut_num: int | None, url: st
         return None
     out_dir = proj / "outputs" / "videos" / _episode_dir_name(episode)
     out_dir.mkdir(parents=True, exist_ok=True)
-    fname = f"video_s{scene_num or 0}_cut{cut_num or 0}_{uuid.uuid4().hex[:8]}.mp4"
+    # v3.1 클립 단위 영상은 cut 대신 clip{clip_id}로 파일명을 잡는다(영상 호출 단위 = 클립).
+    unit = f"clip{clip_id}" if clip_id is not None else f"cut{cut_num or 0}"
+    fname = f"video_s{scene_num or 0}_{unit}_{uuid.uuid4().hex[:8]}.mp4"
     dest = out_dir / fname
     try:
         # ★2026-07-14: 영상 백엔드를 openrouter_video로 바꾼 뒤 다운로드가 401 Unauthorized로
@@ -156,7 +171,7 @@ def save_video(work: str, *, scene_num: int | None, cut_num: int | None, url: st
 
 
 def find_existing_video(work: str, scene_num: int | None, cut_num: int | None,
-                        episode: int | str | None = None) -> str | None:
+                        episode: int | str | None = None, clip_id: str | None = None) -> str | None:
     """이 씬·컷의 영상이 이미 outputs/videos/<화>/에 저장돼있으면 그 로컬 경로를 반환(없으면 None).
     ★2026-07-15 "단계 안에서의 재개" — save_video의 파일명이 video_s{씬}_cut{컷}_{uuid}.mp4라
     uuid가 매번 달라 정확한 경로를 미리 알 수 없으므로 glob으로 찾는다. 같은 컷을 여러 번
@@ -167,7 +182,8 @@ def find_existing_video(work: str, scene_num: int | None, cut_num: int | None,
     video_dir = proj / "outputs" / "videos" / _episode_dir_name(episode)
     if not video_dir.exists():
         return None
-    matches = sorted(video_dir.glob(f"video_s{scene_num or 0}_cut{cut_num or 0}_*.mp4"),
+    unit = f"clip{clip_id}" if clip_id is not None else f"cut{cut_num or 0}"
+    matches = sorted(video_dir.glob(f"video_s{scene_num or 0}_{unit}_*.mp4"),
                      key=lambda p: p.stat().st_mtime, reverse=True)
     return str(matches[0]) if matches else None
 

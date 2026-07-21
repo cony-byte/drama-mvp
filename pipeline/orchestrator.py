@@ -586,6 +586,106 @@ def build_scene_blocks(scene_skeleton: str, script: str,
     return scene, conti_text, errors
 
 
+# ── v3.1 파이프라인 6단계: 씬별 지연 레퍼런스 생성 ───────────────────────────
+# 화 전체 요소를 미리 만들지 않고, 지금 처리하는 씬 하나에 필요한 장소·의상·소품만 등록·생성한다
+# (문서 5단계 '씬1에 필요한 레퍼런스만 생성'). 인물 얼굴은 이미 초상 레퍼런스가 있어 제외.
+
+def ensure_scene_references(work: str, scene: dict, mood: str = "",
+                           conti_body: str = "") -> dict:
+    """이 씬 하나에 필요한 요소(장소·의상·소품)를 등록하고, 아직 레퍼런스 이미지가 없는 것만
+    생성·등록한다. 반환: {registered, failed}. 인물(person)은 얼굴 초상으로 이미 커버되므로 제외."""
+    needs = v3_schema.scene_element_needs(scene)
+    displays: set[str] = set()
+    for name, etype in needs:
+        try:
+            e = oi.register_element(work, name, etype=etype)
+            displays.add((e or {}).get("display") or name)
+        except Exception:
+            displays.add(name)  # 등록 실패해도 이름으로 후속 생성 시도
+    if not displays:
+        return {"registered": 0, "failed": 0}
+    return fix_element_references(work, mood=mood, conti_full=conti_body, only=displays)
+
+
+# ── v3.1 파이프라인 7·8단계: 클립 단위 대표 스틸 + 멀티샷 영상 ────────────────
+# 기존 shot 단위(generate_image_for_shot / generate_cuts_for_scene)를 건드리지 않고, 클립을
+# 영상 생성 1회 단위로 삼는 새 경로다. 대표 스틸 1장(+필요 시 보강컷)을 앵커로, 클립 전체 블록
+# 콘티를 하나의 멀티샷 모션 프롬프트로 넘겨 클립당 영상 1개를 만든다(문서 '스틸'·'영상' 절).
+
+def _clip_ordinal(clip_id: str | None) -> int:
+    """'2-A' → 1, '2-B' → 2 (클립 안의 letter를 1부터의 정수로). 연속성 앵커 참조 텍스트의
+    'approved shot N' 라벨용 — generate_image_for_shot가 그 값을 int로 캐스팅하기 때문."""
+    letter = (clip_id or "").rsplit("-", 1)[-1].strip()[:1].upper()
+    return (ord(letter) - ord("A") + 1) if "A" <= letter <= "Z" else 0
+
+
+def _clip_pseudo_shot(scene: dict, clip: dict, block: dict) -> dict:
+    """클립 대표 블록을 기존 이미지 생성기(generate_image_for_shot)가 이해하는 shot 유사 dict로
+    변환한다 — 그래야 요소 참조(얼굴·의상·장소·소품) 매칭과 의상 잠금 로직을 그대로 재사용한다."""
+    cast = scene.get("cast") or []
+    return {
+        "n": _clip_ordinal(clip.get("clip_id")),
+        "characters": [c["name"] for c in cast if c.get("name")],
+        "costumes": {c["name"]: c["costume"] for c in cast
+                     if c.get("name") and c.get("costume")},
+        "places": [scene["location_tag"]] if scene.get("location_tag") else [],
+        "props": v3_schema.scene_prop_names(scene),
+        "prompt": sb_prompts.clip_still_prompt(scene, clip, block),
+        "caption": clip.get("label") or "",
+    }
+
+
+def generate_clip_still(scene: dict, clip: dict, work: str | None = None,
+                        block: dict | None = None,
+                        continuity_png: bytes | None = None) -> tuple[bytes, float]:
+    """클립의 대표(또는 지정 보강) 블록으로 앵커 스틸 1장 생성 → (PNG, cost$). continuity_png가
+    있으면(같은 씬의 직전 승인 스틸) 연속성 앵커로 넘긴다(규칙 3)."""
+    block = block or v3_schema.representative_block(clip)
+    if not block:
+        raise RuntimeError(f"클립 {clip.get('clip_id')}: 대표 스틸로 삼을 블록이 없어요.")
+    shot = _clip_pseudo_shot(scene, clip, block)
+    continuity_refs = None
+    if continuity_png:
+        prev_ord = max(0, _clip_ordinal(clip.get("clip_id")) - 1)
+        continuity_refs = [(prev_ord, continuity_png)]
+    return generate_image_for_shot(shot, work=work, continuity_refs=continuity_refs)
+
+
+def generate_video_for_clip(work: str, scene_num: int, clip_id: str, png: bytes,
+                            motion_prompt: str, episode: int = 1) -> str:
+    """클립 대표 스틸 1장 + 클립 멀티샷 모션 프롬프트 → 클립 영상 1개(로컬 mp4 경로).
+    저장은 clip{clip_id} 단위(generate_video_for_cut의 clip_id 경로 재사용 — 안전필터 격자
+    회피 로직도 그대로 탄다)."""
+    return generate_video_for_cut(work, scene_num, cut_num=None, png=png,
+                                  motion_prompt=motion_prompt, episode=episode,
+                                  clip_id=clip_id)
+
+
+def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
+                 continuity_png: bytes | None = None) -> dict:
+    """클립 하나를 스틸→영상까지 완주(문서 5단계 씬 내부의 클립 단위 실행). 스틸은 저장(승인 대상),
+    영상 실패는 그 클립만 실패로 남기고 스틸은 보존(재생성 비용 방지). 반환: {clip_id, status,
+    still_png, video_path?, error?}."""
+    scene_num = scene.get("scene_num")
+    clip_id = clip.get("clip_id")
+    try:
+        png, _cost = generate_clip_still(scene, clip, work=work, continuity_png=continuity_png)
+    except Exception as e:
+        return {"clip_id": clip_id, "status": "failed", "still_png": None, "error": str(e)}
+    try:
+        vp_store.save_still(work, scene_num=scene_num,
+                            prompt_summary=(clip.get("label") or ""), png=png,
+                            episode=episode, clip_id=clip_id)
+    except Exception:
+        pass  # 스틸 파일 저장 실패해도 메모리의 png로 영상화는 이어감
+    try:
+        motion = sb_prompts.clip_motion_prompt(scene, clip)
+        path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=episode)
+    except Exception as e:
+        return {"clip_id": clip_id, "status": "still_only", "still_png": png, "error": str(e)}
+    return {"clip_id": clip_id, "status": "ok", "still_png": png, "video_path": path}
+
+
 def _element_names_for_prompt(work: str | None, etype: str) -> list[str]:
     """등록 요소 이름을 프롬프트용으로 정리한다. 공백·하이픈 표기만 다른 중복 의상/장소는
     최초 등록명을 대표값으로 남겨 LLM이 같은 요소에 새 라벨을 계속 만드는 것을 막는다."""
@@ -731,10 +831,13 @@ _INFLIGHT_ELEMENTS: set[tuple[str, str]] = set()
 _INFLIGHT_LOCK = threading.Lock()
 
 
-def fix_element_references(work: str, mood: str = "", conti_full: str = "") -> dict:
+def fix_element_references(work: str, mood: str = "", conti_full: str = "",
+                          only: set[str] | None = None) -> dict:
     """등록됐지만 아직 레퍼런스 이미지가 없는 장소·의상·소품에 대해 고정 이미지를 생성·등록한다.
     인물(person)은 초상화로 이미 얼굴 레퍼런스가 있으므로 건너뛴다. 반환: {등록됨, 실패} 개수.
     실패한 요소는 건너뛰고 계속 진행(전체 실패 방지).
+    only가 주어지면 그 display 이름 집합에 속한 요소만 생성한다(v3.1 6단계 씬별 지연 생성 —
+    화 전체가 아니라 지금 처리하는 씬에 필요한 요소만 만든다. ensure_scene_references가 사용).
     ★이미지 생성(oi.generate)은 건당 수십 초가 걸려서, 씬 하나에 고정할 요소가 여러 개면
     순차 호출이 그 씬 전체를 몇 분씩 묶어뒀다 — 요소별로 병렬 생성해 이 단계를 크게 줄인다.
     또한 병렬로 도는 다른 씬과 같은 요소를 동시에 중복 생성하지 않도록 _INFLIGHT_ELEMENTS로
@@ -751,6 +854,8 @@ def fix_element_references(work: str, mood: str = "", conti_full: str = "") -> d
             name = e.get("display") or ""
             if not name:
                 continue
+            if only is not None and name not in only:
+                continue  # 이 씬에 필요한 요소만(6단계 지연 생성)
             key = (work, name)
             if key in _INFLIGHT_ELEMENTS:
                 continue  # 다른 씬이 지금 이 요소를 생성 중 — 중복 생성 방지, 스킵
@@ -1168,12 +1273,18 @@ def _trim_head_0_1s(path: str, seconds: float = 0.1, timeout: int = 60) -> bool:
 # image-to-video 안전필터가 "실존 인물"로 오판할 때, 컷 이미지를 명백한 2D 일러스트/애니 화풍으로
 # 다시 그려 재시도한다 — 포토리얼 얼굴을 빼면 필터가 통과한다(데모 우선; 그 컷만 화풍이 달라짐).
 def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
-                           motion_prompt: str, episode: int = 1, shot: dict | None = None) -> str:
+                           motion_prompt: str, episode: int = 1, shot: dict | None = None,
+                           clip_id: str | None = None) -> str:
     """스틸컷 1장을 영상화해 로컬 mp4 절대경로를 반환. project_setup.ensure_project(work)를
     먼저 호출해둬야 vp_store가 프로젝트 디렉토리를 찾을 수 있다.
+    clip_id가 주어지면 저장을 컷(cut_num)이 아니라 클립(clip{clip_id}) 단위로 한다 — v3.1
+    영상 호출 단위 = 클립(generate_video_for_clip이 사용). cut_num 경로는 기존 shot 파이프라인용.
     ★실존인물 안전필터에 걸리면 재스타일화 없이 곧바로 얼굴에 빨간 격자를 덮어(cv2 얼굴 자동
     감지) 재시도한다. 격자 회피 시엔 그 격자 스틸이 승인된 시작 프레임임을 프롬프트 맨 앞줄에
     못박고(anchor), 생성된 영상 앞 0.1초를 잘라 격자 첫 프레임이 최종 영상에 안 비치게 한다."""
+    unit = f"클립{clip_id}" if clip_id is not None else f"컷{cut_num}"
+    anchor_name = f"clip{clip_id}.png" if clip_id is not None else f"cut{cut_num}.png"
+
     def _gen_once(image_bytes, prompt):
         # _with_retry 재시도 없이 1회만 — 안전필터는 재시도해도 같은 결과라 낭비
         return hf_video.generate(image_bytes, prompt,
@@ -1190,21 +1301,21 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
             raise
         # 안전필터 → 얼굴 격자로 재시도
         grid_anchor = (
-            f"<<<cut{cut_num}.png>>> is the clean approved start frame and must remain the exact "
+            f"<<<{anchor_name}>>> is the clean approved start frame and must remain the exact "
             f"identity, costume, location, lighting, and screen-direction anchor.\n")
         try:
             url, cost = _gen_once(_facegrid_overlay(png), grid_anchor + motion_prompt)
         except Exception as e2:
             if _is_filter(e2):
                 raise RuntimeError(
-                    f"안전필터 회피 실패 (씬{scene_num} 컷{cut_num}): 얼굴 격자 적용 후에도 필터에 걸렸습니다."
+                    f"안전필터 회피 실패 (씬{scene_num} {unit}): 얼굴 격자 적용 후에도 필터에 걸렸습니다."
                 ) from e2
             raise
         grid_used = True
     path = vp_store.save_video(work, scene_num=scene_num, cut_num=cut_num, url=url,
-                               episode=episode, cost=cost)
+                               episode=episode, cost=cost, clip_id=clip_id)
     if not path:
-        raise RuntimeError(f"영상 다운로드/저장 실패 (씬{scene_num} 컷{cut_num})")
+        raise RuntimeError(f"영상 다운로드/저장 실패 (씬{scene_num} {unit})")
     # 격자로 생성한 경우 격자 첫 프레임이 최종 영상에 비치지 않도록 앞 0.1초 트림
     if grid_used:
         _trim_head_0_1s(path, 0.1)

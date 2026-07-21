@@ -268,3 +268,74 @@ def build_scene_handoff(scene: dict, prev_handoff: dict | None = None) -> dict:
         "last_approved_still": None,
     }
     return handoff
+
+
+# ── 클립 단위 스틸·영상 선택/추출 (문서 스틸/영상 규칙, 규칙 3) ──────────────
+# 5단계 산출물(parse_scene의 scene["clips"][].blocks[])을 6~8단계(레퍼런스·스틸·영상)가
+# 쓰기 좋게 골라주는 순수 유틸 — API·프롬프트 문자열은 여기 두지 않는다(orchestrator/prompts 몫).
+
+_SUPPLEMENTARY_RE = re.compile(r"보강\s*컷")
+
+
+def block_pose(block: dict) -> str:
+    """블록 서술에서 '자세:'(정지 상태 = 스틸용) 부분만 뽑는다. '/ 동작:'(움직임 = 영상용) 이후는
+    버린다. 자세/동작 라벨이 없으면 description(구도 헤더 '—' 뒤) 전체를 그대로 돌려준다."""
+    desc = block.get("description") or block.get("text") or ""
+    m = re.search(r"자세\s*[:：]\s*(.+)", desc)
+    body = m.group(1) if m else desc
+    body = re.split(r"/\s*동작\s*[:：]", body)[0]
+    return body.strip()
+
+
+def representative_block(clip: dict) -> dict | None:
+    """클립의 대표 스틸용 블록(규칙 3 — 그 클립의 감정·상황을 가장 잘 요약하는 블록). 인서트는
+    피하고(디테일 컷이라 대표성이 낮다) 가장 긴 비인서트 블록을 고르되, 동률·전부 인서트면 첫
+    블록. 이 선택 하나가 클립당 대표 스틸 1장의 근거가 된다(문서 '스틸' 절)."""
+    blocks = clip.get("blocks") or []
+    if not blocks:
+        return None
+    non_insert = [b for b in blocks if "인서트" not in (b.get("header") or "")]
+    pool = non_insert or blocks
+    return max(pool, key=lambda b: b.get("seconds") or 0)
+
+
+def supplementary_blocks(clip: dict) -> list[dict]:
+    """대표 스틸 하나로 못 받치는 보강컷 블록들(콘티에 '(보강컷 필요)'로 표시된 것) — 문서
+    '스틸' 절: 핵심 인서트나 크게 다른 감정 구도만 보강 생성한다."""
+    return [b for b in (clip.get("blocks") or []) if _SUPPLEMENTARY_RE.search(b.get("text") or "")]
+
+
+def scene_prop_names(scene: dict) -> list[str]:
+    """씬 소품 선언(소품: 이름A = 스펙 · 이름B = 스펙)에서 소품 이름만. '=' 앞이 이름."""
+    raw = scene.get("props_raw")
+    if not raw:
+        return []
+    names = []
+    for part in re.split(r"\s*[·∙•]\s*", raw):
+        name = part.split("=", 1)[0].strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def scene_element_needs(scene: dict) -> list[tuple[str, str]]:
+    """이 씬 하나를 그리는 데 실제로 필요한 (요소명, 타입) 목록 — 6단계(씬별 지연 레퍼런스
+    생성)의 입력. 인물(person)은 이미 얼굴 초상 레퍼런스가 있으므로 제외하고, 이 씬 선언에
+    등장하는 장소·의상·소품만 모은다(화 전체가 아니라 딱 이 씬 것만 — 지연 생성의 핵심)."""
+    needs: list[tuple[str, str]] = []
+    seen = set()
+
+    def add(name, etype):
+        name = (name or "").strip()
+        key = (name, etype)
+        if name and key not in seen:
+            seen.add(key)
+            needs.append(key)
+
+    if scene.get("location_tag"):
+        add(scene["location_tag"], "place")
+    for c in scene.get("cast") or []:
+        add(c.get("costume"), "costume")
+    for name in scene_prop_names(scene):
+        add(name, "prop")
+    return needs
