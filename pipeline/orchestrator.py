@@ -525,6 +525,67 @@ def build_episode_skeleton(script: str, episode: int = 1,
     return scenes, errors
 
 
+# ── v3.1 파이프라인 5단계: 씬 하나의 상세 블록 생성 + 검증/부분 재생성 ──────────
+# 3단계 뼈대(씬 헤더·선언·클립 마커·초)를 입력으로, 그 씬 하나의 각 클립에 [N초] 블록을 채운다.
+# 화 전체를 한 번에 돌리지 않고 씬 단위로 완주(문서 '5단계부터 씬 하나씩 완주')하기 위한 최소 단위다.
+
+def scene_skeleton_texts(skeleton_text: str) -> list[tuple[int, str]]:
+    """3단계 뼈대 전체 텍스트 → [(씬번호, 그 씬 하나의 뼈대 텍스트)] 목록. 5단계는 이 씬 텍스트를
+    하나씩 받아 상세 블록을 채운다. split_scenes가 '■'를 떼므로 헤더를 복원해 붙인다."""
+    return [(num, f"■ {hdr}\n{body}".strip())
+            for num, hdr, body in parsing.split_scenes(skeleton_text)]
+
+
+def generate_scene_blocks(scene_skeleton: str, script: str,
+                          prior_handoff: dict | None = None,
+                          characters: list[dict] | None = None,
+                          work: str | None = None,
+                          error_feedback: str = "") -> str:
+    """5단계: 씬 뼈대 하나 + 대본 → 그 씬의 상세 블록([N초] 구도/자세/동작/소리)을 채운 콘티 텍스트.
+    error_feedback가 있으면 직전 검증 오류를 프롬프트에 붙여 재생성한다(부분 재작성)."""
+    sys_prompt = sb_prompts.scene_blocks_system(
+        bible=characters_bible(characters),
+        known_places=_element_names_for_prompt(work, "place") or None,
+        known_costumes=_element_names_for_prompt(work, "costume") or None)
+    user = sb_prompts.scene_blocks_user(
+        scene_skeleton, script, prior_handoff=prior_handoff, error_feedback=error_feedback)
+    return _with_retry(_sb_complete, sys_prompt, user).strip()
+
+
+def build_scene_blocks(scene_skeleton: str, script: str,
+                       prior_handoff: dict | None = None,
+                       characters: list[dict] | None = None,
+                       work: str | None = None,
+                       max_attempts: int = 3) -> tuple[dict | None, str, list[str]]:
+    """씬 상세 블록을 생성 + v3_schema로 파싱·전체 검증(validate_scene: 블록 합 일치까지)까지 수행.
+    검증 실패 시 오류를 피드백으로 붙여 max_attempts까지 재생성(문서 5단계 '자동 검증/부분 재생성',
+    셀프체크 규칙 21 '어기면 다시 써서 통과'). 반환: (scene_dict, conti_text, errors).
+    errors가 비면 상세 콘티가 확정된 것이므로 scene['state']를 references_ready로 전진한다 —
+    다음 단계(6·7)가 이 씬에 필요한 레퍼런스·스틸을 만들며 stills_ready 이후로 더 전진시킨다."""
+    conti_text = ""
+    scene: dict | None = None
+    errors: list[str] = ["(미생성)"]
+    feedback = ""
+    for _ in range(max_attempts):
+        conti_text = generate_scene_blocks(
+            scene_skeleton, script, prior_handoff=prior_handoff,
+            characters=characters, work=work, error_feedback=feedback)
+        parsed = parsing.split_scenes(conti_text)
+        if not parsed:
+            errors = ["씬 헤더(■ 씬N …)를 찾지 못했어요 — 출력이 v3.1 씬 형식이 아니에요."]
+            feedback = "\n".join(errors)
+            continue
+        _, hdr, body = parsed[0]
+        scene = v3_schema.parse_scene(hdr, body)
+        scene["state"] = "validating"
+        errors = v3_schema.validate_scene(scene)
+        if not errors:
+            scene["state"] = v3_schema.next_state(scene["state"])  # validating → references_ready
+            break
+        feedback = "\n".join(errors)
+    return scene, conti_text, errors
+
+
 def _element_names_for_prompt(work: str | None, etype: str) -> list[str]:
     """등록 요소 이름을 프롬프트용으로 정리한다. 공백·하이픈 표기만 다른 중복 의상/장소는
     최초 등록명을 대표값으로 남겨 LLM이 같은 요소에 새 라벨을 계속 만드는 것을 막는다."""
