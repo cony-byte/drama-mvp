@@ -705,6 +705,18 @@ function startJob(endpoint, mode, prepMsg, query) {
 // "드라마 만들기"는 곧바로 영상이 아니라 먼저 씬별 스틸컷 미리보기를 만든다(영상 만들기 전 확인).
 // ★2026-07-21(사용자 지시): 전체 씬을 한 번에 만들지 않고 1씬만 먼저 만든다 — 이후 화면에서
 // "+ 다음 씬 만들기" 버튼으로 사용자가 원할 때마다 다음 씬을 하나씩 추가한다.
+// v3.1 엔진(scene→clip→block) 미리보기/제작 중인지. true면 "다음 씬"·"영상 만들기"가 v3
+// 엔드포인트(v3/preview-scene, v3/produce)로 라우팅되고 스틸뷰에서 v3 제작 버튼을 보여준다.
+let v3Mode = false;
+
+function _setV3Buttons(on) {
+  v3Mode = on;
+  const mk = $("makeVideoFromStillsBtn");
+  const v3 = $("v3ProduceBtn");
+  if (mk) mk.classList.toggle("hidden", on);       // v3 모드에선 구 produce 숨김
+  if (v3) v3.classList.toggle("hidden", !on);
+}
+
 $("makeDramaBtn").addEventListener("click", async () => {
   const ep = currentEpisode();
   if (!ep) return;
@@ -712,6 +724,7 @@ $("makeDramaBtn").addEventListener("click", async () => {
     alert("대본이 먼저 있어야 해요. 대본을 AI 생성하거나 작성해주세요.");
     return;
   }
+  _setV3Buttons(false);
   try {
     await startJob("preview-stills", "stills", "장면 미리보기 준비 중", { scene_num: 1 });
   } catch (e) {
@@ -719,12 +732,37 @@ $("makeDramaBtn").addEventListener("click", async () => {
   }
 });
 
+$("v3PreviewBtn").addEventListener("click", async () => {
+  const ep = currentEpisode();
+  if (!ep) return;
+  if (!ep.script) {
+    alert("대본이 먼저 있어야 해요. 대본을 AI 생성하거나 작성해주세요.");
+    return;
+  }
+  _setV3Buttons(true);
+  try {
+    await startJob("v3/preview-scene", "stills", "v3.1 미리보기 준비 중", { scene_num: 1 });
+  } catch (e) {
+    alert(`v3.1 미리보기 실패: ${e.message}`);
+  }
+});
+
+$("v3ProduceBtn").addEventListener("click", async () => {
+  if (!confirm("v3.1 엔진으로 이 화 전체를 씬 순서대로 자동 제작·합본할까요? 몇 분 걸려요.")) return;
+  try {
+    await startJob("v3/produce", "video", "v3.1 영상 제작 준비 중");
+  } catch (e) {
+    alert(`v3.1 영상 제작 실패: ${e.message}`);
+  }
+});
+
 $("nextSceneBtn").addEventListener("click", async () => {
   const ep = currentEpisode();
   const next = nextUnmadeSceneNum(ep);
   if (!next) return;
+  const endpoint = v3Mode ? "v3/preview-scene" : "preview-stills";
   try {
-    await startJob("preview-stills", "stills", `씬${next} 준비 중`, { scene_num: next });
+    await startJob(endpoint, "stills", `씬${next} 준비 중`, { scene_num: next });
   } catch (e) {
     alert(`씬 생성 실패: ${e.message}`);
   }

@@ -454,6 +454,11 @@ def _new_episode(num: int) -> dict:
         "scene_stills": None,  # 영상 만들기 전 씬별 대표 스틸컷 미리보기
         "cut_results": None,
         "compiled_path": None,
+        # ── v3.1 파이프라인(scene→clip→block) 전용 상태 — 구 shot 필드와 별도 네임스페이스로
+        # 저장해 기존 프로젝트를 깨뜨리지 않는다(11단계 안전 폴백). 옛 화는 이 필드가 없어도
+        # 잡 래퍼가 .get()으로 안전하게 처리하고, v3.1로 처음 제작할 때 채워진다.
+        "v3_skeleton": None,   # 화 전체 뼈대 원문(3단계) — 씬별 상세블록 생성의 입력
+        "v3_scenes": None,     # [{scene_num, state, conti_text, handoff, stills, plan}] — 씬별 완료 상태·재개용
     }
 
 

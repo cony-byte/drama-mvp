@@ -21,8 +21,8 @@ from pipeline.orchestrator import (
     generate_episode_plan_summary, generate_episode_summary, generate_key_scene_image,
     generate_pitch_card, generate_scene_plan, generate_script, generate_shots_by_scene,
     generate_stills_for_scene, generate_synopsis, looks_like_clarification,
-    produce_episode_video, regenerate_cut_still, run_full_pipeline, studio_script_bible,
-    videoize_cut_job,
+    preview_scene_v3, produce_episode_v3_job, produce_episode_video, regenerate_cut_still,
+    run_full_pipeline, studio_script_bible, videoize_cut_job,
 )
 
 app = FastAPI()
@@ -539,6 +539,45 @@ def studio_produce_episode(project_id: str, num: int):
     job_id = jobs.create()
     threading.Thread(target=_run_with_locked_references,
                      args=(produce_episode_video, project_id, num, job_id),
+                     daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.post("/api/studio/{project_id}/episodes/{num}/v3/preview-scene")
+def studio_preview_scene_v3(project_id: str, num: int, scene_num: int = 1):
+    """v3.1 엔진 미리보기 — scene_num 씬 하나의 클립별 대표 스틸까지 만드는 백그라운드 job.
+    구 preview-stills와 같은 job/stills 메커니즘(scene_stills 형태)이라 프런트가 그대로 렌더한다."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    if not episode.get("script"):
+        raise HTTPException(400, "대본이 먼저 있어야 미리보기를 만들 수 있어요.")
+    job_id = jobs.create()
+    threading.Thread(target=_run_with_locked_references,
+                     args=(partial(preview_scene_v3, scene_num=scene_num),
+                          project_id, num, job_id),
+                     daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.post("/api/studio/{project_id}/episodes/{num}/v3/produce")
+def studio_produce_v3(project_id: str, num: int):
+    """v3.1 엔진 화 전체 제작 — 뼈대→씬 순차(상세블록·레퍼런스·클립 스틸·멀티샷 영상)→합본까지
+    한 job으로. 완료 씬은 재개 시 건너뛴다. 프런트는 job 폴링으로 최종 합본 영상을 받는다."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    if not episode.get("script"):
+        raise HTTPException(400, "대본이 먼저 있어야 영상을 만들 수 있어요.")
+    job_id = jobs.create()
+    threading.Thread(target=_run_with_locked_references,
+                     args=(produce_episode_v3_job, project_id, num, job_id),
                      daemon=True).start()
     return {"job_id": job_id}
 

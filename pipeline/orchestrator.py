@@ -505,11 +505,12 @@ def generate_episode_skeleton(script: str, episode: int = 1,
         sb_prompts.episode_skeleton_user(script)).strip()
 
 
-def build_episode_skeleton(script: str, episode: int = 1,
-                          characters: list[dict] | None = None) -> tuple[list[dict], list[str]]:
-    """화 전체 뼈대를 생성 + pipeline.v3_schema로 파싱·검증까지 한 번에 수행.
-    반환: (scenes, errors). errors가 비어 있어야(구조·시간 규칙 통과) 5단계(씬별 상세 블록)로
-    넘어갈 수 있다 — 문서의 '씬 통과 조건과 상태 머신' 원칙을 화 전체 단위에 먼저 적용한 것."""
+def generate_episode_skeleton_validated(
+        script: str, episode: int = 1,
+        characters: list[dict] | None = None) -> tuple[str, list[dict], list[str]]:
+    """3단계 뼈대를 생성 + 파싱·검증. 반환: (뼈대 원문 text, scenes, errors). 뼈대 원문을 그대로
+    돌려주는 이유는 5단계(scene_skeleton_texts로 씬별 뼈대 텍스트를 잘라 build_scene_blocks에
+    넘김)에 그 원문이 필요하기 때문이다."""
     text = generate_episode_skeleton(script, episode=episode, characters=characters)
     scene_tuples = parsing.split_scenes(text)
     scenes = [v3_schema.parse_scene(hdr, body) for _, hdr, body in scene_tuples]
@@ -522,6 +523,16 @@ def build_episode_skeleton(script: str, episode: int = 1,
     if not errors:
         for s in scenes:
             s["state"] = v3_schema.next_state(s["state"])  # validating → references_ready
+    return text, scenes, errors
+
+
+def build_episode_skeleton(script: str, episode: int = 1,
+                          characters: list[dict] | None = None) -> tuple[list[dict], list[str]]:
+    """화 전체 뼈대를 생성 + pipeline.v3_schema로 파싱·검증까지 한 번에 수행.
+    반환: (scenes, errors). errors가 비어 있어야(구조·시간 규칙 통과) 5단계(씬별 상세 블록)로
+    넘어갈 수 있다 — 문서의 '씬 통과 조건과 상태 머신' 원칙을 화 전체 단위에 먼저 적용한 것."""
+    _text, scenes, errors = generate_episode_skeleton_validated(
+        script, episode=episode, characters=characters)
     return scenes, errors
 
 
@@ -801,6 +812,167 @@ def compile_episode_v3(work: str, idea: str, plan: list[dict], episode_title: st
         raise RuntimeError("영상화된 클립이 하나도 없어서 합본할 수 없어요.")
     mood_prompt = generate_mood_prompt(idea)
     return episode_compile.compile_episode(work, episode_title, plan, mood_prompt=mood_prompt)
+
+
+# ── v3.1 파이프라인 11·12단계: 서버 잡 래퍼 (백그라운드 스레드 + jobs + save_fn) ──
+# server.py의 _run_with_locked_references(build_fn, project, episode, job_id, save_fn) 패턴에 맞춘
+# 진입 함수들. v3.1 상태는 episode dict의 v3_skeleton / v3_scenes 필드에 별도로 저장한다(구 shot
+# 필드 scenes/shots_by_scene/scene_stills와 충돌하지 않게 — 기존 프로젝트 무손상 폴백 = 11단계).
+# 단, 프런트 재사용을 위해 대표 스틸은 기존 scene_stills 형태({scene_num,cut_num,image,caption})로도
+# 함께 채운다(renderStills가 그대로 그림).
+
+def _v3_scene_map(episode: dict) -> dict[int, dict]:
+    """episode.v3_scenes(list) → {scene_num(int): 씬 레코드}. JSON 왕복으로 문자열이 된 번호도 int로."""
+    return {int(s.get("scene_num")): s for s in (episode.get("v3_scenes") or [])
+            if s.get("scene_num") is not None}
+
+
+def _v3_all_stills(v3map: dict[int, dict]) -> list[dict]:
+    """모든 씬의 대표 스틸을 씬·클립 순서로 모은다(프런트 scene_stills 호환 목록)."""
+    out = []
+    for n in sorted(v3map):
+        out.extend(v3map[n].get("stills") or [])
+    return out
+
+
+def _ensure_v3_skeleton(episode: dict, script: str, num: int,
+                        characters: list[dict] | None, job_id: str, save_fn) -> str:
+    """episode에 v3 뼈대가 없으면 생성·검증·저장하고 뼈대 원문을 반환. 이미 있으면 그대로 반환."""
+    skeleton_text = episode.get("v3_skeleton")
+    if skeleton_text:
+        return skeleton_text
+    jobs.update(job_id, stage="화 전체 뼈대 설계 중")
+    skeleton_text, sk_scenes, sk_errors = generate_episode_skeleton_validated(
+        script, episode=num, characters=characters)
+    if sk_errors:
+        raise RuntimeError("화 뼈대 검증에 실패했어요: " + " / ".join(sk_errors))
+    scene_lines = [[s["scene_num"], s.get("title") or ""] for s in sk_scenes
+                   if s.get("scene_num") is not None]
+    if save_fn:
+        save_fn(v3_skeleton=skeleton_text, scene_lines=scene_lines)
+    return skeleton_text
+
+
+def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
+                     scene_num: int = 1) -> None:
+    """v3.1 미리보기 — 씬 하나의 상세 블록 → 레퍼런스 → 클립별 대표 스틸까지(영상은 안 만듦).
+    승인용 스틸을 scene_stills(구 형태) + v3_scenes(v3 상태)에 누적 저장한다. 완료된(스틸 있는)
+    씬을 다시 요청하면 새로 만들지 않는다(중복 방지). 백그라운드 스레드 전제(예외는 jobs error)."""
+    work = project["work"]
+    num = episode["num"]
+    characters = project.get("characters", [])
+    mood = _project_mood(project)
+    try:
+        project_setup.ensure_project(work)
+        script = episode.get("script")
+        if not script:
+            raise RuntimeError("대본이 먼저 있어야 해요.")
+        skeleton_text = _ensure_v3_skeleton(episode, script, num, characters, job_id, save_fn)
+        skel = dict(scene_skeleton_texts(skeleton_text))
+        jobs.update(job_id, total=len(skel))
+
+        v3map = _v3_scene_map(episode)
+        if scene_num in v3map and v3map[scene_num].get("stills"):
+            jobs.update(job_id, status="done", stage="완료", stills=_v3_all_stills(v3map))
+            return
+        if scene_num not in skel:
+            raise RuntimeError(f"씬{scene_num}을 화 뼈대에서 찾을 수 없어요.")
+
+        prior_handoff = (v3map.get(scene_num - 1) or {}).get("handoff")
+        jobs.update(job_id, stage=f"씬{scene_num} 상세 콘티 작성 중")
+        scene, conti_text, errors = build_scene_blocks(
+            skel[scene_num], script, prior_handoff=prior_handoff,
+            characters=characters, work=work)
+        if errors or not scene:
+            raise RuntimeError(f"씬{scene_num} 콘티 검증 실패: " + " / ".join(errors or ["파싱 실패"]))
+
+        jobs.update(job_id, stage=f"씬{scene_num} 배경·의상 준비 중")
+        try:
+            ensure_scene_references(work, scene, mood=mood, conti_body=conti_text)
+        except Exception:
+            pass
+
+        stills = []
+        prev_still = None
+        for clip in scene.get("clips") or []:
+            clip_id = clip.get("clip_id")
+            jobs.update(job_id, stage=f"씬{scene_num} {clip_id} 대표 스틸 생성 중")
+            try:
+                png, _cost = generate_clip_still(scene, clip, work=work, continuity_png=prev_still)
+            except Exception:
+                continue  # 이 클립 스틸 실패 — 건너뛰고 다음 클립
+            prev_still = png
+            try:
+                vp_store.save_still(work, scene_num=scene_num,
+                                    prompt_summary=clip.get("label", ""), png=png,
+                                    episode=num, clip_id=clip_id)
+            except Exception:
+                pass
+            stills.append({
+                "scene_num": scene_num, "cut_num": _clip_ordinal(clip_id), "clip_id": clip_id,
+                "caption": clip.get("label", ""), "image": oi.png_data_url(png),
+                "video_path": None, "representative": True,
+            })
+
+        v3map[scene_num] = {
+            "scene_num": scene_num, "state": "stills_ready", "conti_text": conti_text,
+            "handoff": v3_schema.build_scene_handoff(scene, prior_handoff), "stills": stills,
+        }
+        v3_scenes = [v3map[k] for k in sorted(v3map)]
+        all_stills = _v3_all_stills(v3map)
+        if save_fn:
+            save_fn(v3_scenes=v3_scenes, scene_stills=all_stills)
+        jobs.update(job_id, status="done", stage="완료", stills=all_stills)
+    except Exception as e:
+        jobs.update(job_id, status="error", stage="오류", error=str(e))
+
+
+def produce_episode_v3_job(project: dict, episode: dict, job_id: str, save_fn=None) -> None:
+    """v3.1 화 전체 제작 — 뼈대(없으면 생성)부터 씬 순차로 상세블록→레퍼런스→클립 스틸·영상까지
+    완주한 뒤 합본(V.O.만 나레이션). 완료 씬(v3_scenes state=completed)은 건너뛰고 재개한다.
+    백그라운드 스레드 전제(예외는 jobs error). 최종 합본 경로는 job.video_path로 전달."""
+    work = project["work"]
+    num = episode["num"]
+    characters = project.get("characters", [])
+    mood = _project_mood(project)
+    idea = project.get("idea") or project.get("logline") or ""
+    try:
+        project_setup.ensure_project(work)
+        script = episode.get("script")
+        if not script:
+            raise RuntimeError("대본이 먼저 있어야 영상을 만들 수 있어요.")
+        skeleton_text = _ensure_v3_skeleton(episode, script, num, characters, job_id, save_fn)
+        skel = scene_skeleton_texts(skeleton_text)
+        v3map = _v3_scene_map(episode)
+
+        def is_completed(sn):
+            r = v3map.get(int(sn))
+            return bool(r and r.get("state") == "completed")
+
+        def load_scene(sn):
+            return v3map.get(int(sn))
+
+        def save_scene(sn, payload):
+            v3map[int(sn)] = {**(v3map.get(int(sn)) or {}), **payload}
+            if save_fn:
+                save_fn(v3_scenes=[v3map[k] for k in sorted(v3map)])
+
+        def on_progress(sn, cid, msg):
+            label = f"씬{sn}" + (f" {cid}" if cid else "")
+            jobs.update(job_id, stage=f"{label}: {msg}")
+
+        result = produce_episode_v3(
+            work, script, skel, episode=num, characters=characters, mood=mood,
+            is_completed=is_completed, save_scene=save_scene, load_scene=load_scene,
+            on_progress=on_progress)
+
+        jobs.update(job_id, stage="합본 중")
+        path = compile_episode_v3(work, idea, result["plan"], episode_title=f"{num}화")
+        if save_fn:
+            save_fn(compiled_path=path)
+        jobs.update(job_id, status="done", stage="완료", video_path=path)
+    except Exception as e:
+        jobs.update(job_id, status="error", stage="오류", error=str(e))
 
 
 def _element_names_for_prompt(work: str | None, etype: str) -> list[str]:
