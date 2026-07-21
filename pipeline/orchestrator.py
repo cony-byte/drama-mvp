@@ -686,6 +686,123 @@ def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
     return {"clip_id": clip_id, "status": "ok", "still_png": png, "video_path": path}
 
 
+# ── v3.1 파이프라인 9단계: 씬 순차 완주 + 연속성 핸드오프 저장 ────────────────
+# 씬1을 상세블록→레퍼런스→클립 스틸·영상까지 완주한 뒤 handoff를 만들어 씬2로 넘긴다. 완료된
+# 씬은 save_scene으로 저장하고, 재개 시 is_completed로 건너뛰어 다시 만들지 않는다(문서 최소
+# 인수 조건: 서버 재시작 후 완료 씬 건너뛰고 현재 씬부터 재개).
+
+def produce_scene(work: str, scene: dict, episode: int = 1,
+                  prior_handoff: dict | None = None, mood: str = "",
+                  conti_body: str = "", on_progress=None) -> dict:
+    """씬 하나 완주 — 6단계 레퍼런스 → 클립별 스틸·영상(produce_clip) → 핸드오프 생성. 같은 씬의
+    직전 클립 승인 스틸을 다음 클립의 연속성 앵커로 넘긴다(규칙 3). 모든 클립 성공 시 state를
+    completed로. 반환: {scene_num, state, clips, handoff}."""
+    scene_num = scene.get("scene_num")
+
+    def notify(clip_id, msg):
+        if on_progress:
+            on_progress(scene_num, clip_id, msg)
+
+    notify(None, "레퍼런스 준비 중")
+    try:
+        ensure_scene_references(work, scene, mood=mood, conti_body=conti_body)
+    except Exception:
+        pass  # 레퍼런스 생성 실패해도 스틸 생성은 이어감(참조 없이라도)
+
+    clip_results = []
+    prev_still = None
+    for clip in scene.get("clips") or []:
+        notify(clip.get("clip_id"), "스틸·영상 생성 중")
+        r = produce_clip(work, scene, clip, episode=episode, continuity_png=prev_still)
+        if r.get("still_png"):
+            prev_still = r["still_png"]  # 다음 클립 연속성 앵커
+        clip_results.append(r)
+        notify(clip.get("clip_id"), r["status"])
+
+    handoff = v3_schema.build_scene_handoff(scene, prior_handoff)
+    all_ok = bool(clip_results) and all(r["status"] == "ok" for r in clip_results)
+    if all_ok:
+        scene["state"] = "completed"
+    return {"scene_num": scene_num, "state": scene.get("state"),
+            "clips": clip_results, "handoff": handoff}
+
+
+def _clip_plan_segment(scene: dict, clip: dict, video_path: str) -> dict:
+    """클립 영상 1개 → 합본 편집계획 세그먼트. narration_text는 V.O.만(립싱크·off·현장음은 클립
+    영상 자체 오디오가 담당) — 10단계 오디오 층 분리의 핵심. caption을 나레이션으로 쓰지 않는다."""
+    vo = v3_schema.clip_vo_lines(clip)
+    narration = " ".join(l["text"] for l in vo) or None
+    speaker = (vo[0]["speaker"] if vo else None) or "나레이션"
+    return {
+        "scene_num": scene.get("scene_num"),
+        "cut_num": _clip_ordinal(clip.get("clip_id")),
+        "clip_id": clip.get("clip_id"),
+        "video_path": video_path,
+        "start": 0.0,
+        "duration": edit_plan._probe_duration(video_path),
+        "narration_text": narration,
+        "speaker": speaker,
+        "delivery": None,
+    }
+
+
+def produce_episode_v3(work: str, script: str, skeleton_scenes: list[tuple[int, str]],
+                       episode: int = 1, characters: list[dict] | None = None, mood: str = "",
+                       is_completed=None, save_scene=None, load_scene=None,
+                       on_progress=None, prior_handoff: dict | None = None) -> dict:
+    """v3.1 화 전체를 씬 순차로 완주. skeleton_scenes = scene_skeleton_texts()의 [(씬번호, 뼈대)].
+    각 씬: build_scene_blocks(5단계) → produce_scene(6~8단계) → handoff → save_scene(9단계).
+    is_completed(scene_num)가 True면 그 씬은 건너뛰고 저장된 handoff/plan을 load_scene으로 이어받아
+    재개한다(완료 씬 재생성 방지). 씬 하나의 상세 블록 검증이 끝내 실패하면 이후 씬의 연속성이
+    깨지므로 그 씬에서 멈춘다. 반환: {plan, handoff, scenes}. plan은 compile_episode_v3에 넘긴다."""
+    handoff = prior_handoff
+    plan: list[dict] = []
+    results: list[dict] = []
+    for scene_num, skeleton_text in skeleton_scenes:
+        if is_completed and is_completed(scene_num):
+            saved = load_scene(scene_num) if load_scene else None
+            if saved and saved.get("handoff"):
+                handoff = saved["handoff"]
+            if saved and saved.get("plan"):
+                plan.extend(saved["plan"])
+            results.append({"scene_num": scene_num, "state": "completed", "skipped": True})
+            continue
+
+        if on_progress:
+            on_progress(scene_num, None, "상세 콘티 작성 중")
+        scene, conti_text, errors = build_scene_blocks(
+            skeleton_text, script, prior_handoff=handoff, characters=characters, work=work)
+        if errors or not scene:
+            results.append({"scene_num": scene_num, "state": "failed", "errors": errors})
+            break  # 연속성 유지 위해 이 씬에서 멈춤
+
+        sr = produce_scene(work, scene, episode=episode, prior_handoff=handoff,
+                           mood=mood, conti_body=conti_text, on_progress=on_progress)
+        scene_plan = [_clip_plan_segment(scene, clip, cr["video_path"])
+                      for clip, cr in zip(scene.get("clips") or [], sr["clips"])
+                      if cr.get("video_path")]
+        plan.extend(scene_plan)
+        handoff = sr["handoff"]
+        if save_scene:
+            save_scene(scene_num, {"scene_num": scene_num, "state": sr["state"],
+                                   "conti_text": conti_text, "handoff": handoff,
+                                   "plan": scene_plan})
+        results.append(sr)
+    return {"plan": plan, "handoff": handoff, "scenes": results}
+
+
+# ── v3.1 파이프라인 10단계: caption 자동 나레이션 제거 + 오디오 층 분리 합본 ────
+
+def compile_episode_v3(work: str, idea: str, plan: list[dict], episode_title: str = "1화") -> str:
+    """produce_episode_v3의 plan(클립 영상 세그먼트, narration_text=V.O.만)을 합본한다. 기존
+    compile_episode_video와 달리 attach_narration(모든 caption을 나레이션으로)을 호출하지 않는다 —
+    립싱크·off·현장음은 클립 영상 자체 오디오로, V.O.만 별도 나레이션 TTS 층으로 믹싱된다."""
+    if not plan:
+        raise RuntimeError("영상화된 클립이 하나도 없어서 합본할 수 없어요.")
+    mood_prompt = generate_mood_prompt(idea)
+    return episode_compile.compile_episode(work, episode_title, plan, mood_prompt=mood_prompt)
+
+
 def _element_names_for_prompt(work: str | None, etype: str) -> list[str]:
     """등록 요소 이름을 프롬프트용으로 정리한다. 공백·하이픈 표기만 다른 중복 의상/장소는
     최초 등록명을 대표값으로 남겨 LLM이 같은 요소에 새 라벨을 계속 만드는 것을 막는다."""

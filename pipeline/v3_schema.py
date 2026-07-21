@@ -318,6 +318,49 @@ def scene_prop_names(scene: dict) -> list[str]:
     return names
 
 
+# ── 소리 층 추출 (규칙 2 소리 층: 립싱크/off/V.O.) — 10단계 오디오 분리용 ──────
+# 립싱크·off는 생성 영상 자체 오디오로 커버되고, V.O.(내레이션·속마음)만 별도 나레이션/TTS 층
+# 후보다(문서 '소리' 절). 합본이 caption을 통째로 나레이션으로 읽던 것을 이 분리로 대체한다.
+_Q = '["“”\'‘’]'  # 큰/작은따옴표(직선·곡선) 문자 클래스
+_LIPSYNC_RE = re.compile(
+    rf'(\S+?)\s*대사\s*(\(off\)|\(오프\))?\s*[:：]\s*{_Q}(.+?){_Q}\s*(\(립싱크\))?')
+_VO_RE = re.compile(rf'(\S+?)\s+V\.?\s*O\.?\s*[:：]\s*{_Q}(.+?){_Q}')
+
+
+def block_sound_layers(block: dict) -> list[dict]:
+    """블록 서술에서 소리 층을 뽑는다 → [{kind: 'lipsync'|'off'|'vo', speaker, text}, ...].
+    등장 순서(위치)대로 정렬. 대사(off)=off, 대사(립싱크)/그냥 대사=lipsync, V.O.=vo."""
+    text = block.get("text") or ""
+    hits = []
+    for m in _VO_RE.finditer(text):
+        hits.append((m.start(), {"kind": "vo", "speaker": m.group(1).strip(),
+                                 "text": m.group(2).strip()}))
+    for m in _LIPSYNC_RE.finditer(text):
+        # V.O. 매치와 겹치는 위치는 건너뛴다(같은 대사를 이중 집계 방지).
+        if any(abs(pos - m.start()) < 3 for pos, _ in hits):
+            continue
+        kind = "off" if m.group(2) else "lipsync"
+        hits.append((m.start(), {"kind": kind, "speaker": m.group(1).strip(),
+                                 "text": m.group(3).strip()}))
+    return [h for _, h in sorted(hits, key=lambda x: x[0])]
+
+
+def clip_vo_lines(clip: dict) -> list[dict]:
+    """클립의 V.O.(내레이션/속마음) 대사만 블록 순서대로 — 별도 나레이션 TTS 층 후보(10단계)."""
+    out = []
+    for b in clip.get("blocks") or []:
+        out.extend(layer for layer in block_sound_layers(b) if layer["kind"] == "vo")
+    return out
+
+
+def scene_vo_lines(scene: dict) -> list[dict]:
+    """씬 전체 V.O. 대사(클립·블록 순서대로)."""
+    out = []
+    for c in scene.get("clips") or []:
+        out.extend(clip_vo_lines(c))
+    return out
+
+
 def scene_element_needs(scene: dict) -> list[tuple[str, str]]:
     """이 씬 하나를 그리는 데 실제로 필요한 (요소명, 타입) 목록 — 6단계(씬별 지연 레퍼런스
     생성)의 입력. 인물(person)은 이미 얼굴 초상 레퍼런스가 있으므로 제외하고, 이 씬 선언에
