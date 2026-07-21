@@ -12,8 +12,21 @@ function setApiBase(v) {
 
 const $ = (id) => document.getElementById(id);
 
+// "AI 생성" 버튼 첫 클릭 = 의견 입력창만 펼치고 대기, 이미 펼쳐진 상태에서 클릭 = 그 값으로 진행.
+// noteInputId가 hidden이면 보여주고 포커스만 준 뒤 false(진행하지 말 것)를 반환한다.
+function revealNoteThenProceed(noteInputId) {
+  const el = $(noteInputId);
+  if (el.classList.contains("hidden")) {
+    el.classList.remove("hidden");
+    el.focus();
+    return false;
+  }
+  return true;
+}
+
 const views = {
   input: $("inputView"),
+  works: $("worksView"),
   chat: $("chatView"),
   pitch: $("pitchView"),
   videoPrep: $("videoPrepView"),
@@ -139,6 +152,7 @@ function updateStageList(stageText) {
 
 let pollTimer = null;
 let currentJobMode = "video"; // "video" | "stills"
+let currentJobId = null;      // 방금 완성한 영상 job — 결과 화면에서 "작품에 저장"에 사용
 
 function stopPolling() {
   if (pollTimer) clearInterval(pollTimer);
@@ -151,21 +165,33 @@ async function pollJob(jobId) {
     const res = await fetch(`${base}/api/jobs/${jobId}`);
     if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
     const job = await res.json();
-    if (job.status === "running") {
+
+    // 씬 개수(total)를 알게 되는 즉시 미리보기 화면으로 전환하고, 이후 폴링마다 완성된
+    // 스틸부터 하나씩 채운다 — 전부 끝날 때까지 기다리지 않는다.
+    if (currentJobMode === "stills" && job.total) {
+      showView("stills");
+      renderStillsList(job.stills || [], job.total);
+    } else if (job.status === "running") {
       updateStageList(job.stage || "진행 중");
-    } else if (job.status === "done" && currentJobMode === "stills") {
+    }
+
+    if (job.status === "done" && currentJobMode === "stills") {
       stopPolling();
-      // 스틸이 화(scene_stills)에 저장됐으니 프로젝트를 다시 받아 미리보기 화면을 띄운다.
+      // 스틸이 화(scene_stills)에 저장됐으니 프로젝트를 다시 받아 최종본으로 맞춘다.
       await loadStudio(studioProjectId);
       renderStills();
-      showView("stills");
     } else if (job.status === "done") {
       stopPolling();
       $("resultVideo").src = `${base}${job.video_url}`;
+      $("publishVideoBtn").disabled = false;
       showView("result");
     } else if (job.status === "error") {
       stopPolling();
-      $("errorText").textContent = job.error || "알 수 없는 오류가 발생했어요.";
+      const rawErr = job.error || "";
+      const errMsg = rawErr.includes("InputImageSensitiveContentDetected")
+        ? "이미지 안전 필터에 걸렸어요. 다시 시도하면 자동으로 얼굴 가림 처리 후 재생성합니다."
+        : rawErr || "알 수 없는 오류가 발생했어요.";
+      $("errorText").textContent = errMsg;
       showView("error");
     }
   } catch (e) {
@@ -364,6 +390,9 @@ let currentStudioProject = null;
 
 function renderStudio(project) {
   currentStudioProject = project;
+  $("studioTitle").textContent =
+    project.title || project.logline || project.idea || "제목 없는 작품";
+  renderPublished(project.published || []);
   $("studioLogline").textContent = project.logline;
   $("studioSynopsis").textContent = project.synopsis || "";
 
@@ -402,6 +431,76 @@ async function loadStudio(projectId) {
   if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
   renderStudio(await res.json());
 }
+
+function renderPublished(list) {
+  const box = $("publishedList");
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = '<div class="roster-empty">아직 발행된 영상이 없어요. 영상을 만든 뒤 “작품에 저장”을 누르면 여기 모여요.</div>';
+    return;
+  }
+  const base = getApiBase();
+  for (const v of list) {
+    const div = document.createElement("div");
+    div.className = "published-card";
+    div.innerHTML = `
+      <video controls playsinline preload="metadata"
+             src="${base}/api/studio/${studioProjectId}/published/${v.id}/video"></video>
+      <div class="published-meta">
+        <span class="published-title">${v.title || `${v.episode_num}화`}</span>
+        <button type="button" class="published-del" data-id="${v.id}" title="삭제">🗑️</button>
+      </div>`;
+    box.appendChild(div);
+  }
+}
+
+$("publishedList").addEventListener("click", async (e) => {
+  const del = e.target.closest(".published-del");
+  if (!del || !studioProjectId) return;
+  if (!confirm("이 발행 영상을 목록에서 삭제할까요?")) return;
+  const base = getApiBase();
+  await fetch(`${base}/api/studio/${studioProjectId}/published/${del.dataset.id}`,
+    { method: "DELETE" });
+  await loadStudio(studioProjectId);
+});
+
+// 제목 편집(로그라인 위 '제목' 섹션)
+$("editTitleBtn").addEventListener("click", () => {
+  $("studioTitleInput").value =
+    (currentStudioProject && currentStudioProject.title) || "";
+  $("studioTitle").classList.add("hidden");
+  $("editTitleBtn").classList.add("hidden");
+  $("titleEditRow").classList.remove("hidden");
+});
+
+function exitTitleEdit() {
+  $("titleEditRow").classList.add("hidden");
+  $("studioTitle").classList.remove("hidden");
+  $("editTitleBtn").classList.remove("hidden");
+}
+
+$("cancelTitleBtn").addEventListener("click", exitTitleEdit);
+
+$("saveTitleBtn").addEventListener("click", async () => {
+  if (!studioProjectId) return;
+  const btn = $("saveTitleBtn");
+  btn.disabled = true;
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/studio/${studioProjectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: $("studioTitleInput").value.trim() }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    renderStudio(await res.json());
+    exitTitleEdit();
+  } catch (e) {
+    alert(`제목 저장 실패: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 $("editSynopsisBtn").addEventListener("click", () => {
   $("studioSynopsisEdit").value = (currentStudioProject && currentStudioProject.synopsis) || "";
@@ -443,6 +542,7 @@ $("saveSynopsisBtn").addEventListener("click", async () => {
 
 $("genSynopsisBtn").addEventListener("click", async () => {
   if (!studioProjectId) return;
+  if (!revealNoteThenProceed("synopsisNoteInput")) return;
   const btn = $("genSynopsisBtn");
   const original = btn.textContent;
   btn.disabled = true;
@@ -451,6 +551,8 @@ $("genSynopsisBtn").addEventListener("click", async () => {
     const base = getApiBase();
     const res = await fetch(`${base}/api/studio/${studioProjectId}/generate-synopsis`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: $("synopsisNoteInput").value.trim() }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -538,9 +640,10 @@ function openEpisodeDetail(num) {
 
 $("closeEpisodeDetailBtn").addEventListener("click", () => showView("studio"));
 
-function startJob(endpoint, mode, prepMsg) {
+function startJob(endpoint, mode, prepMsg, query) {
   const base = getApiBase();
-  return fetch(`${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/${endpoint}`,
+  const qs = query ? `?${new URLSearchParams(query)}` : "";
+  return fetch(`${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/${endpoint}${qs}`,
     { method: "POST" })
     .then(async (res) => {
       if (!res.ok) {
@@ -548,6 +651,7 @@ function startJob(endpoint, mode, prepMsg) {
         throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
       }
       const { job_id } = await res.json();
+      currentJobId = job_id;
       currentJobMode = mode;
       showView("progress");
       updateStageList(prepMsg);
@@ -558,6 +662,8 @@ function startJob(endpoint, mode, prepMsg) {
 }
 
 // "드라마 만들기"는 곧바로 영상이 아니라 먼저 씬별 스틸컷 미리보기를 만든다(영상 만들기 전 확인).
+// ★2026-07-21(사용자 지시): 전체 씬을 한 번에 만들지 않고 1씬만 먼저 만든다 — 이후 화면에서
+// "+ 다음 씬 만들기" 버튼으로 사용자가 원할 때마다 다음 씬을 하나씩 추가한다.
 $("makeDramaBtn").addEventListener("click", async () => {
   const ep = currentEpisode();
   if (!ep) return;
@@ -566,35 +672,177 @@ $("makeDramaBtn").addEventListener("click", async () => {
     return;
   }
   try {
-    await startJob("preview-stills", "stills", "장면 미리보기 준비 중");
+    await startJob("preview-stills", "stills", "장면 미리보기 준비 중", { scene_num: 1 });
   } catch (e) {
     alert(`장면 미리보기 실패: ${e.message}`);
   }
 });
 
-function renderStills() {
+$("nextSceneBtn").addEventListener("click", async () => {
   const ep = currentEpisode();
+  const next = nextUnmadeSceneNum(ep);
+  if (!next) return;
+  try {
+    await startJob("preview-stills", "stills", `씬${next} 준비 중`, { scene_num: next });
+  } catch (e) {
+    alert(`씬 생성 실패: ${e.message}`);
+  }
+});
+
+// scene_lines(전체 씬 목록)와 scene_stills(이미 만들어진 씬들)를 비교해 아직 안 만든 다음 씬
+// 번호를 찾는다. scene_lines를 아직 모르면(첫 미리보기 전) null.
+function nextUnmadeSceneNum(ep) {
+  if (!ep || !ep.scene_lines || !ep.scene_lines.length) return null;
+  const done = new Set((ep.scene_stills || []).map((s) => s.scene_num));
+  for (const [n] of ep.scene_lines) {
+    if (!done.has(n)) return n;
+  }
+  return null;
+}
+
+// ★2026-07-21(사용자 지시 — 씬 대표 1컷이 아니라 컷마다 재생성/영상화 버튼을 달고, 완료 즉시
+// 합본으로 넘어가지 않게): items는 이제 씬당 여러 컷을 담은 평면 리스트다({scene_num, cut_num,
+// caption, image, video_path}). 도착한 순서·씬 번호와 무관하게 (scene_num, cut_num) 순으로
+// 정렬해 카드를 그리고, 카드마다 [🔁 재생성]/[🎬 영상화] 버튼을 붙인다.
+function renderStillsList(items, total) {
   const list = $("stillsList");
   list.innerHTML = "";
-  const stills = (ep && ep.scene_stills) || [];
-  if (!stills.length) {
-    list.innerHTML = `<div class="roster-empty">생성된 장면이 없어요.</div>`;
+  const cuts = [...(items || [])].sort((a, b) =>
+    (a.scene_num - b.scene_num) || ((a.cut_num || 0) - (b.cut_num || 0)));
+  if (!cuts.length) {
+    list.innerHTML = `<div class="roster-empty">${total ? "생성 중..." : "생성된 장면이 없어요."}</div>`;
     return;
   }
-  for (const s of stills) {
+  for (const c of cuts) {
     const div = document.createElement("div");
     div.className = "still-card";
-    const img = s.image ? `<img src="${s.image}" alt="${s.title || ""}">` : "";
-    div.innerHTML = `${img}<div class="still-title">${s.title || `씬 ${s.scene_num}`}</div>
-      <div class="still-caption">${s.caption || ""}</div>`;
+    div.dataset.scene = c.scene_num;
+    div.dataset.cut = c.cut_num;
+    div.innerHTML = `
+      <div class="still-media">${c.image ? `<img src="${c.image}" alt="씬${c.scene_num} 컷${c.cut_num}">` : ""}</div>
+      <div class="still-title">씬${c.scene_num} · 컷${c.cut_num}</div>
+      <div class="still-caption">${c.caption || ""}</div>
+      <div class="still-cut-actions">
+        <button type="button" class="text-btn cut-regen-btn">🔁 재생성</button>
+        <button type="button" class="text-btn cut-videoize-btn">🎬 영상화</button>
+      </div>`;
     list.appendChild(div);
+  }
+}
+
+function renderStills() {
+  const ep = currentEpisode();
+  const stills = (ep && ep.scene_stills) || [];
+  renderStillsList(stills, stills.length);
+  const next = nextUnmadeSceneNum(ep);
+  const btn = $("nextSceneBtn");
+  if (next) {
+    btn.textContent = `+ 다음 씬 만들기 (씬${next})`;
+    btn.classList.remove("hidden");
+  } else {
+    btn.classList.add("hidden");
   }
 }
 
 $("stillsBackBtn").addEventListener("click", () => showView("episodeDetail"));
 
-// 미리보기에서 만든 씬·샷을 그대로 재사용해 이미지→영상→합본까지 제작한다.
+// 컷 카드 안의 미디어 영역을 영상 재생 중(폴링) 상태로 표시.
+function pollCutVideoJob(jobId, cardEl) {
+  const base = getApiBase();
+  const media = cardEl.querySelector(".still-media");
+  const videoizeBtn = cardEl.querySelector(".cut-videoize-btn");
+  const check = async () => {
+    try {
+      const res = await fetch(`${base}/api/jobs/${jobId}`);
+      if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+      const job = await res.json();
+      if (job.status === "done") {
+        media.innerHTML = `<video controls playsinline src="${base}${job.video_url}"></video>`;
+        videoizeBtn.textContent = "🎬 다시 영상화";
+        videoizeBtn.disabled = false;
+        return;
+      }
+      if (job.status === "error") {
+        const rawErr = job.error || "";
+        const errMsg = rawErr.includes("InputImageSensitiveContentDetected")
+          ? "안전 필터에 걸렸어요. 다시 시도해보세요."
+          : rawErr || "영상화 실패";
+        videoizeBtn.textContent = "🎬 영상화";
+        videoizeBtn.disabled = false;
+        alert(`영상화 실패: ${errMsg}`);
+        return;
+      }
+      setTimeout(check, 3000);
+    } catch (e) {
+      videoizeBtn.textContent = "🎬 영상화";
+      videoizeBtn.disabled = false;
+      alert(`연결 실패: ${e.message}`);
+    }
+  };
+  setTimeout(check, 3000);
+}
+
+// 컷 카드의 재생성/영상화 버튼 — 이벤트 위임(카드는 매번 다시 그려지므로).
+$("stillsList").addEventListener("click", async (e) => {
+  const card = e.target.closest(".still-card");
+  if (!card || !studioProjectId || !currentEpisodeNum) return;
+  const sceneNum = card.dataset.scene;
+  const cutNum = card.dataset.cut;
+  const base = getApiBase();
+
+  if (e.target.closest(".cut-regen-btn")) {
+    const btn = e.target.closest(".cut-regen-btn");
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "재생성 중…";
+    try {
+      const res = await fetch(
+        `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/cuts/${sceneNum}/${cutNum}/regenerate`,
+        { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+      }
+      const newStill = await res.json();
+      card.querySelector(".still-media").innerHTML =
+        `<img src="${newStill.image}" alt="씬${sceneNum} 컷${cutNum}">`;
+      await loadStudio(studioProjectId); // 화 데이터도 갱신해둬(다음 재생성/영상화가 최신 스틸을 보게)
+    } catch (err) {
+      alert(`이미지 재생성 실패: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+    return;
+  }
+
+  if (e.target.closest(".cut-videoize-btn")) {
+    const btn = e.target.closest(".cut-videoize-btn");
+    btn.disabled = true;
+    btn.textContent = "영상화 중…";
+    try {
+      const res = await fetch(
+        `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/cuts/${sceneNum}/${cutNum}/videoize`,
+        { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+      }
+      const { job_id } = await res.json();
+      pollCutVideoJob(job_id, card);
+    } catch (err) {
+      alert(`영상화 실패: ${err.message}`);
+      btn.disabled = false;
+      btn.textContent = "🎬 영상화";
+    }
+    return;
+  }
+});
+
+// 미리보기에서 만든 씬·샷을 그대로 재사용해 이미지→영상→합본까지 제작한다(개별 컷을 다
+// 검토·영상화한 뒤 한 번에 합치고 싶을 때 쓰는 전체 자동 경로 — 기본 흐름은 위 컷별 버튼).
 $("makeVideoFromStillsBtn").addEventListener("click", async () => {
+  if (!confirm("모든 씬의 모든 컷을 자동으로 이미지→영상화하고 합본까지 만들어요. 시간이 꽤 걸리고, 개별로 검토·재생성한 컷도 다시 만들어질 수 있어요. 계속할까요?")) return;
   try {
     await startJob("produce", "video", "영상 제작 준비 중");
   } catch (e) {
@@ -648,6 +896,7 @@ $("saveSummaryBtn").addEventListener("click", async () => {
   } catch (e) { alert(`요약 저장 실패: ${e.message}`); }
 });
 $("genSummaryBtn").addEventListener("click", async () => {
+  if (!revealNoteThenProceed("summaryNoteInput")) return;
   const btn = $("genSummaryBtn");
   btn.disabled = true;
   const original = btn.textContent;
@@ -656,7 +905,11 @@ $("genSummaryBtn").addEventListener("click", async () => {
     const base = getApiBase();
     const res = await fetch(
       `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/generate-summary`,
-      { method: "POST" }
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: $("summaryNoteInput").value.trim() }),
+      }
     );
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -688,6 +941,7 @@ $("saveScriptBtn").addEventListener("click", async () => {
   } catch (e) { alert(`대본 저장 실패: ${e.message}`); }
 });
 $("genScriptBtn").addEventListener("click", async () => {
+  if (!revealNoteThenProceed("scriptNoteInput")) return;
   const btn = $("genScriptBtn");
   btn.disabled = true;
   const original = btn.textContent;
@@ -696,7 +950,11 @@ $("genScriptBtn").addEventListener("click", async () => {
     const base = getApiBase();
     const res = await fetch(
       `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/generate-script`,
-      { method: "POST" }
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: $("scriptNoteInput").value.trim() }),
+      }
     );
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -876,6 +1134,7 @@ $("genCharacterBtn").addEventListener("click", async () => {
     alert("이름을 먼저 입력해주세요.");
     return;
   }
+  if (!revealNoteThenProceed("charHintInput")) return;
   const btn = $("genCharacterBtn");
   const original = btn.textContent;
   btn.disabled = true;
@@ -888,6 +1147,7 @@ $("genCharacterBtn").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name,
+        hint: $("charHintInput").value.trim(),
         gender: $("charGenderInput").value,
         age: $("charAgeInput").value.trim(),
         role: $("charRoleInput").value.trim(),
@@ -946,13 +1206,104 @@ $("goToStudioBtn").addEventListener("click", async () => {
   }
 });
 
-$("skipToStudioBtn").addEventListener("click", async () => {
-  // 온보딩(채팅→기획안→영상 준비) 전체를 건너뛰고 빈 스튜디오 프로젝트를 바로 만든다 —
-  // 로그라인·캐릭터는 스튜디오 화면에서 "+ 캐릭터 추가"·화 상세 등으로 직접 채우면 된다.
-  const btn = $("skipToStudioBtn");
+$("seedDemoBtn").addEventListener("click", async () => {
+  // (개발용) 로그라인·줄거리·캐릭터 2명·1화(대본)까지 채워진 더미 작품을 만든 뒤
+  // 내 작품 목록으로 돌아가 카드로 보여준다(스튜디오 → 내 작품 → 상세 흐름 유지).
+  const btn = $("seedDemoBtn");
   btn.disabled = true;
   try {
     const base = getApiBase();
+    const res = await fetch(`${base}/api/studio/seed`, { method: "POST" });
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    await openWorks();
+  } catch (e) {
+    $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
+    showView("error");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("addEpisodeBtn").addEventListener("click", async () => {
+  if (!studioProjectId) return;
+  const base = getApiBase();
+  await fetch(`${base}/api/studio/${studioProjectId}/episodes`, { method: "POST" });
+  await loadStudio(studioProjectId);
+});
+
+// ── 작품 관리 페이지(카드 목록) ──
+function renderWorks(projects) {
+  const box = $("worksList");
+  box.innerHTML = "";
+  if (!projects || !projects.length) {
+    box.innerHTML = '<p class="modal-hint">아직 만든 작품이 없어요. “+ 새 작품”으로 시작해보세요.</p>';
+    return;
+  }
+  for (const p of projects) {
+    const card = document.createElement("div");
+    card.className = "work-card";
+    card.dataset.id = p.id;
+    const title = document.createElement("div");
+    title.className = "work-card-title";
+    title.textContent = p.title || "제목 없는 작품";
+    const meta = document.createElement("div");
+    meta.className = "work-card-meta";
+    meta.innerHTML =
+      `<span class="work-stage">${p.stage}</span>` +
+      `<span class="work-eps">${p.episode_count}화</span>`;
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "work-card-del";
+    del.dataset.id = p.id;
+    del.title = "삭제";
+    del.textContent = "🗑️";
+    card.append(title, meta, del);
+    box.appendChild(card);
+  }
+}
+
+async function openWorks() {
+  const base = getApiBase();
+  showView("works");
+  $("worksList").innerHTML = '<p class="modal-hint">불러오는 중…</p>';
+  try {
+    const res = await fetch(`${base}/api/studio`);
+    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+    const { projects } = await res.json();
+    renderWorks(projects);
+  } catch (e) {
+    $("worksList").innerHTML =
+      `<p class="modal-hint">불러오기 실패: ${e.message} (서버 주소 설정을 확인해주세요)</p>`;
+  }
+}
+
+$("openWorksBtn").addEventListener("click", openWorks);
+$("worksBackBtn").addEventListener("click", () => showView("input"));
+$("studioBackBtn").addEventListener("click", openWorks);
+
+$("worksList").addEventListener("click", async (e) => {
+  const delBtn = e.target.closest(".work-card-del");
+  if (delBtn) {
+    e.stopPropagation();
+    if (!confirm("이 작품을 삭제할까요? 되돌릴 수 없어요.")) return;
+    const base = getApiBase();
+    await fetch(`${base}/api/studio/${delBtn.dataset.id}`, { method: "DELETE" });
+    await openWorks();
+    return;
+  }
+  const card = e.target.closest(".work-card");
+  if (!card) return;
+  studioProjectId = card.dataset.id;
+  await loadStudio(studioProjectId);
+  showView("studio");
+});
+
+$("newWorkBtn").addEventListener("click", async () => {
+  // 빈 스튜디오 프로젝트를 만들고 바로 연다(스킵 흐름과 동일).
+  const base = getApiBase();
+  const btn = $("newWorkBtn");
+  btn.disabled = true;
+  try {
     const res = await fetch(`${base}/api/studio/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -969,33 +1320,6 @@ $("skipToStudioBtn").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
   }
-});
-
-$("seedDemoBtn").addEventListener("click", async () => {
-  // 테스트 편의 — 로그라인·줄거리·캐릭터 2명·1화(대본)까지 채워진 더미 프로젝트를 즉시 연다.
-  const btn = $("seedDemoBtn");
-  btn.disabled = true;
-  try {
-    const base = getApiBase();
-    const res = await fetch(`${base}/api/studio/seed`, { method: "POST" });
-    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
-    const { project_id } = await res.json();
-    studioProjectId = project_id;
-    await loadStudio(project_id);
-    showView("studio");
-  } catch (e) {
-    $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;
-    showView("error");
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-$("addEpisodeBtn").addEventListener("click", async () => {
-  if (!studioProjectId) return;
-  const base = getApiBase();
-  await fetch(`${base}/api/studio/${studioProjectId}/episodes`, { method: "POST" });
-  await loadStudio(studioProjectId);
 });
 
 $("startChatBtn").addEventListener("click", startChat);
@@ -1027,3 +1351,26 @@ function resetToInput() {
 }
 $("restartBtn").addEventListener("click", resetToInput);
 $("errorRetryBtn").addEventListener("click", resetToInput);
+
+$("publishVideoBtn").addEventListener("click", async () => {
+  if (!studioProjectId || !currentJobId) return;
+  const btn = $("publishVideoBtn");
+  btn.disabled = true;
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/api/studio/${studioProjectId}/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: currentJobId, episode_num: currentEpisodeNum }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+    }
+    await loadStudio(studioProjectId);
+    showView("studio");
+  } catch (e) {
+    alert(`저장 실패: ${e.message}`);
+    btn.disabled = false;
+  }
+});

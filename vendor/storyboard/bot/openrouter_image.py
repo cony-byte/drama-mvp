@@ -545,6 +545,13 @@ def png_data_url(png: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
 
+def data_url_to_png(data_url: str) -> bytes:
+    """data URL(png_data_url의 역변환) → PNG bytes. 미리보기 스틸(scene_stills)을 영상화 단계에서
+    재사용할 때(재생성 없이) 씀(2026-07-21)."""
+    b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+    return base64.b64decode(b64)
+
+
 def element_refs(work: str | None, mentions: list[str]) -> list[str]:
     """이름 목록 → 참조 data URL 리스트(엘리먼트 id 기준 중복 제거)."""
     out, seen = [], set()
@@ -655,6 +662,27 @@ def shot_ref_entries(work: str | None, shot: dict) -> list[tuple[str, str]]:
     return out
 
 
+def shot_refs_with_instructions(work: str | None, shot: dict) -> tuple[str, list[str]]:
+    """(참조 이미지 역할 설명 프롬프트 텍스트, url 리스트) — shot_ref_entries()가 만드는
+    (role, url) 목록을 실제로 써먹는 곳이 없었다(2026-07-21 실측 — _ROLE_INSTRUCTIONS와
+    shot_ref_entries가 정의만 되고 아무 데도 호출되지 않는 죽은 코드였음). input_references
+    API 자체엔 참조별 역할/설명 필드가 없어서, 프롬프트 본문에 번호 붙여 역할을 명시하는
+    방식으로 실제로 전달한다 — 이게 없으면 생성기가 어떤 참조가 얼굴용/의상용인지 몰라
+    참조를 뒤섞어 써서, 인물 얼굴이 컷마다 다르게 나오거나 의상·헤어가 흔들리는 문제로
+    이어진다."""
+    entries = shot_ref_entries(work, shot)
+    if not entries:
+        return "", []
+    lines = []
+    urls = []
+    for i, (role, url) in enumerate(entries, start=1):
+        instr = _ROLE_INSTRUCTIONS.get(role, "reference image — use as appropriate for this scene.")
+        lines.append(f"Reference image {i}: {instr}")
+        urls.append(url)
+    text = "Attached reference images, in order (follow each one's stated role exactly):\n" + "\n".join(lines)
+    return text, urls
+
+
 def shot_costume_text_notes(work: str | None, shot: dict) -> list[tuple[str, str]]:
     """이미지 참조가 없는(description-only) 의상 멘션 — (표시이름, 설명) 리스트.
     ★2026-07-15: 참조 이미지가 없는 의상은 shot_refs/shot_ref_entries에서 아예 빠져버려서
@@ -710,7 +738,7 @@ def _size_for(aspect_ratio: str | None) -> str:
 
 
 def generate(prompt: str, *, model: str | None = None, aspect_ratio: str | None = None,
-             refs: list[str] | None = None, timeout: int | None = None,
+             size: str | None = None, refs: list[str] | None = None, timeout: int | None = None,
              quality: str | None = None, moderation: str | None = None) -> tuple[bytes, float]:
     """이미지 1장 생성 → (PNG bytes, cost$). 실패 시 예외.
 
@@ -718,7 +746,10 @@ def generate(prompt: str, *, model: str | None = None, aspect_ratio: str | None 
     quality: auto|low|medium|high. 미지정시 config.OPENROUTER_IMAGE_QUALITY(기본 low) —
     quality 생략하면 provider가 high로 갈 수 있어(장당 최대 10배+ 비용) 항상 명시한다.
     moderation: auto|low — 안전필터 강도. 미지정시 config.OPENROUTER_IMAGE_MODERATION(기본 low).
-    aspect_ratio: "9:16"/"16:9" 등 — gpt-image는 aspect_ratio 필드를 무시하므로 size로 변환해 보낸다."""
+    aspect_ratio: "9:16"/"16:9" 등 — gpt-image는 aspect_ratio 필드를 무시하므로 size로 변환해 보낸다.
+    size: "WIDTHxHEIGHT"를 직접 지정하고 싶을 때(aspect_ratio 매핑을 건너뜀) — 지정하면 이게
+    우선한다. gpt-image는 가로·세로 모두 16의 배수만 허용하고 최소 픽셀 예산(대략 832x832,
+    692,224px) 미달이면 400 에러를 낸다(실측 확인: 768x768은 거부, 832x832는 통과)."""
     if not config.OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY 미설정 — 이미지 생성 불가")
     if timeout is None:
@@ -727,7 +758,7 @@ def generate(prompt: str, *, model: str | None = None, aspect_ratio: str | None 
     payload: dict = {
         "model": model or config.OPENROUTER_IMAGE_MODEL,
         "prompt": prompt,
-        "size": _size_for(ar),
+        "size": size or _size_for(ar),
         "quality": quality or config.OPENROUTER_IMAGE_QUALITY,
         "moderation": moderation or config.OPENROUTER_IMAGE_MODERATION,
     }

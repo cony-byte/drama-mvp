@@ -18,7 +18,6 @@ def ensure_project(work: str) -> Path:
                 "slug": work,
                 "work_name": work,
                 "project_root": str(proj_dir),
-                "notion_page_id": "",
                 "status": "draft",
             },
             "shared_paths": {
