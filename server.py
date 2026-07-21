@@ -6,6 +6,28 @@ import base64
 import os
 import threading
 
+
+# .env를 프로세스 환경으로 로드(python-dotenv 의존성 없이). vendor/.../config.py가 import 시점에
+# os.environ에서 OPENROUTER_API_KEY 등을 읽으므로, 반드시 pipeline import보다 먼저 실행돼야 한다.
+# 이미 환경에 설정된 값은 덮어쓰지 않는다(실제 환경변수/셸 export 우선).
+def _load_dotenv(name: str = ".env") -> None:
+    import pathlib
+    p = pathlib.Path(__file__).resolve().parent / name
+    if not p.exists():
+        return
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+_load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
