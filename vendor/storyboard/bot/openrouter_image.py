@@ -332,6 +332,16 @@ def register_element(work: str, display: str, etype: str = "person",
     with _ELEMENTS_LOCK:
         elems = load_elements(work)
         cur = next((e for e in elems if _nfc(e.get("display", "")) == display), None)
+        # 같은 의상 라벨의 공백·하이픈 표기 흔들림(예: "편의점 유니폼-A" vs
+        # "편의점유니폼A")은 새 의상으로 등록하지 않고 기존 요소의 별칭으로 합친다.
+        if cur is None and etype == "costume":
+            costume_key = re.sub(r"[\s_\-]+", "", display).casefold()
+            cur = next((e for e in elems
+                        if e.get("type") == "costume"
+                        and re.sub(r"[\s_\-]+", "", _nfc(e.get("display", ""))).casefold()
+                        == costume_key), None)
+            if cur is not None:
+                cur["aliases"] = sorted(set((cur.get("aliases") or []) + [display]))
         if cur is None:
             cur = {"id": uuid.uuid4().hex, "display": display, "aliases": [], "status": "confirmed"}
             elems.append(cur)
@@ -566,6 +576,17 @@ def element_refs(work: str | None, mentions: list[str]) -> list[str]:
     return out
 
 
+def _shot_costume_assignments(shot: dict) -> dict[str, str]:
+    """샷 JSON의 인물→의상 매핑을 정규화. 구버전 샷에는 필드가 없으므로 빈 dict."""
+    raw = shot.get("costumes") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        _nfc(str(character)).strip(): _nfc(str(costume)).strip()
+        for character, costume in raw.items() if character and costume
+    }
+
+
 def _shot_mentions(work: str | None, shot: dict) -> list[str]:
     """한 컷에 붙일 참조 data URL: characters/places/props/elements 필드 + 프롬프트·캡션 텍스트에
     등장하는 등록 엘리먼트(장소·소품 포함) 전부. 장소·소품은 샷마다 있을 수도 없을 수도 있음(맥락
@@ -578,7 +599,8 @@ def _shot_mentions(work: str | None, shot: dict) -> list[str]:
     focus_char로 지정된 인물의 참조를 mentions 맨 앞으로 옮긴다. focus_char이 없거나(null),
     mentions에 실제로 없는(3단계 LLM의 환각/오타) 이름이면 아무 것도 안 바꾸고 원래 순서 그대로
     둔다 — fail-safe, 절대 예외를 던지거나 깨진 리스트를 만들지 않는다."""
-    mentions = (list(shot.get("characters") or []) + list(shot.get("places") or [])
+    costume_names = list(_shot_costume_assignments(shot).values())
+    mentions = (list(shot.get("characters") or []) + costume_names + list(shot.get("places") or [])
                 + list(shot.get("props") or []) + list(shot.get("elements") or []))
     tnorm = _nfc(f"{shot.get('prompt', '')} {shot.get('caption', '')}")
     for e in load_elements(work):
@@ -648,8 +670,8 @@ _ROLE_INSTRUCTIONS = {
 }
 
 
-def shot_ref_entries(work: str | None, shot: dict) -> list[tuple[str, str]]:
-    """(role, url) 순서쌍 — costume-first 순서 유지. role은 person/costume/place/prop."""
+def _shot_ref_details(work: str | None, shot: dict) -> list[tuple[str, str, str]]:
+    """(role, display name, url) — 의상 담당 인물을 프롬프트에 연결하기 위한 내부 상세값."""
     out, seen = [], set()
     for m in _shot_mentions(work, shot):
         e = resolve_element(work, m)
@@ -658,8 +680,13 @@ def shot_ref_entries(work: str | None, shot: dict) -> list[tuple[str, str]]:
         seen.add(e.get("id"))
         u = _element_data_url(work, e)
         if u:
-            out.append((e.get("type") or "person", u))
+            out.append((e.get("type") or "person", e.get("display") or str(m), u))
     return out
+
+
+def shot_ref_entries(work: str | None, shot: dict) -> list[tuple[str, str]]:
+    """(role, url) 순서쌍 — 기존 호출 호환용. role은 person/costume/place/prop."""
+    return [(role, url) for role, _name, url in _shot_ref_details(work, shot)]
 
 
 def shot_refs_with_instructions(work: str | None, shot: dict) -> tuple[str, list[str]]:
@@ -670,13 +697,30 @@ def shot_refs_with_instructions(work: str | None, shot: dict) -> tuple[str, list
     방식으로 실제로 전달한다 — 이게 없으면 생성기가 어떤 참조가 얼굴용/의상용인지 몰라
     참조를 뒤섞어 써서, 인물 얼굴이 컷마다 다르게 나오거나 의상·헤어가 흔들리는 문제로
     이어진다."""
-    entries = shot_ref_entries(work, shot)
-    if not entries:
+    details = _shot_ref_details(work, shot)
+    if not details:
         return "", []
+    assignments = _shot_costume_assignments(shot)
     lines = []
     urls = []
-    for i, (role, url) in enumerate(entries, start=1):
-        instr = _ROLE_INSTRUCTIONS.get(role, "reference image — use as appropriate for this scene.")
+    for i, (role, name, url) in enumerate(details, start=1):
+        if role == "costume":
+            wearers = [character for character, costume in assignments.items()
+                       if _nfc(costume) == _nfc(name)]
+            if wearers:
+                wearer_text = ", ".join(wearers)
+                others = [c for c in (shot.get("characters") or []) if c not in wearers]
+                instr = (f"outfit reference '{name}' for {wearer_text} ONLY — copy every clothing "
+                         "detail exactly onto those named character(s)")
+                if others:
+                    instr += f"; do NOT apply this outfit to {', '.join(others)}"
+                instr += ". Ignore faces, pose, background, and lighting from this outfit image."
+            else:
+                instr = _ROLE_INSTRUCTIONS["costume"]
+        elif role == "person":
+            instr = f"identity reference for {name} — " + _ROLE_INSTRUCTIONS["person"]
+        else:
+            instr = _ROLE_INSTRUCTIONS.get(role, "reference image — use as appropriate for this scene.")
         lines.append(f"Reference image {i}: {instr}")
         urls.append(url)
     text = "Attached reference images, in order (follow each one's stated role exactly):\n" + "\n".join(lines)

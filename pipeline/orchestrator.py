@@ -490,20 +490,58 @@ def generate_scene_plan(script: str, episode: int = 1,
         sb_prompts.storyboard_plan_user(script)).strip()
 
 
+def _element_names_for_prompt(work: str | None, etype: str) -> list[str]:
+    """등록 요소 이름을 프롬프트용으로 정리한다. 공백·하이픈 표기만 다른 중복 의상/장소는
+    최초 등록명을 대표값으로 남겨 LLM이 같은 요소에 새 라벨을 계속 만드는 것을 막는다."""
+    if not work:
+        return []
+    out, seen = [], set()
+    for e in oi.load_elements(work):
+        if e.get("type") != etype or not e.get("display"):
+            continue
+        name = e["display"]
+        key = re.sub(r"[\s_\-]+", "", name).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+    return out
+
+
+def _continuity_declarations(conti: str) -> str:
+    """이전 콘티에서 다음 씬의 의상·장소·조명 연속성에 필요한 선언 줄만 압축 추출."""
+    lines = []
+    for line in (conti or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("등장:", "장소:", "무드/조명:")):
+            lines.append(stripped)
+    return "\n".join(lines[-12:])
+
+
 def generate_conti(script: str, plan_text: str, scenes_plan: list[tuple[int, str]],
-                   episode: int = 1, characters: list[dict] | None = None) -> str:
+                   episode: int = 1, characters: list[dict] | None = None,
+                   work: str | None = None, prior_conti: str = "") -> str:
     """상세 콘티. app.py의 씬 단위 병렬 호출(_gen_scene)과 같은 프롬프트 패턴이지만
     MVP는 순차 for-loop로(디버깅 쉬움, 데모 안정성 우선)."""
-    sys_prompt = sb_prompts.storyboard_system(bible=characters_bible(characters), target_episode=episode)
+    sys_prompt = sb_prompts.storyboard_system(
+        bible=characters_bible(characters), target_episode=episode,
+        known_places=_element_names_for_prompt(work, "place") or None,
+        known_costumes=_element_names_for_prompt(work, "costume") or None)
     parts = []
     for num, line in scenes_plan:
+        continuity = _continuity_declarations("\n\n".join([prior_conti, *parts]))
+        continuity_block = ""
+        if continuity:
+            continuity_block = (
+                "\n\n[앞서 확정된 씬 선언 — 같은 시간대에서 바로 이어지는 인물의 의상·장소는 "
+                "아래 라벨을 그대로 재사용하고 새 이름을 만들지 마라]\n" + continuity)
         user = (
             f"[씬 설계안 — 화 전체 목록(참고용, 다른 씬은 이미 별도로 처리 중이니 이 씬에만 집중)]\n"
             f"{plan_text}\n\n"
             f"[원본 대본 — 사건·행동·대사 하나도 바꾸지 마라]\n{script}\n\n"
             f"(지금은 화 전체가 아니라 이 씬 하나만 상세 콘티로 써라: '{line}'. "
             f"반드시 '■ 씬{num} · N초 · 제목' 헤더로 시작해 이 씬의 샷 콘티만 출력하고 다른 씬은 "
-            "언급하지 마라. 대본의 사건·행동·대사는 하나도 바꾸지 마라.)"
+            f"언급하지 마라. 대본의 사건·행동·대사는 하나도 바꾸지 마라.){continuity_block}"
         )
         parts.append(_with_retry(_sb_complete, sys_prompt, user).strip())
     return "\n\n".join(parts)
@@ -648,6 +686,44 @@ def fix_element_references(work: str, mood: str = "", conti_full: str = "") -> d
     return {"registered": registered, "failed": len(results) - registered}
 
 
+def _scene_costume_assignments(conti_body: str) -> dict[str, str]:
+    """상세 콘티의 `등장: 인물(의상: 라벨, 설명)` 선언에서 인물→의상 라벨을 추출한다.
+
+    샷 분해 LLM이 costumes 필드를 누락하거나 잘못 연결해도 코드가 이 선언을 SSOT로 보정한다.
+    """
+    assignments = {}
+    for line in (conti_body or "").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("등장:"):
+            continue
+        declaration = stripped.split(":", 1)[1]
+        for part in re.split(r"\s*[·•]\s*", declaration):
+            m = re.match(r"\s*([^()]+?)\s*\(\s*(?:의상\s*:\s*)?([^,)]+)", part)
+            if not m:
+                continue
+            character, costume = m.group(1).strip(), m.group(2).strip()
+            if character and costume:
+                assignments[character] = costume
+    return assignments
+
+
+def _restore_costume_assignments(scenes: list[tuple[int, str, str]],
+                                 shots_by_scene: dict[int, list[dict]]) -> dict[int, list[dict]]:
+    """구버전 저장 샷의 누락된 costumes 매핑을 저장된 씬 콘티에서 복원한다."""
+    scene_bodies = {int(num): body for num, _header, body in scenes}
+    for scene_num, shots in shots_by_scene.items():
+        assignments = _scene_costume_assignments(scene_bodies.get(int(scene_num), ""))
+        if not assignments:
+            continue
+        for shot in shots:
+            visible = set(shot.get("characters") or [])
+            mapped = {character: costume for character, costume in assignments.items()
+                      if character in visible}
+            if mapped:
+                shot["costumes"] = mapped
+    return shots_by_scene
+
+
 def generate_shots_by_scene(scenes: list[tuple[int, str, str]], work: str | None = None,
                             characters: list[dict] | None = None) -> dict[int, list[dict]]:
     """씬별 상세콘티 body를 샷 단위로 분해. 반환: {씬번호: [shot dict, ...]}.
@@ -657,16 +733,45 @@ def generate_shots_by_scene(scenes: list[tuple[int, str, str]], work: str | None
     elems = oi.load_elements(work) if work else []
     places = sorted({e["display"] for e in elems if e.get("type") == "place"})
     props = sorted({e["display"] for e in elems if e.get("type") == "prop"})
-    costumes = sorted({e["display"] for e in elems if e.get("type") == "costume"})
+    costumes = _element_names_for_prompt(work, "costume")
     system = sb_prompts.storyboard_shots_system(bible=characters_bible(characters),
                                                 places=places or None,
                                                 props=props or None, costumes=costumes or None)
     shots_by_scene = {}
+    character_cards = {
+        (c.get("name") or "").strip(): c for c in (characters or []) if (c.get("name") or "").strip()
+    }
     for num, _hdr, body in scenes:
+        scene_costumes = _scene_costume_assignments(body)
         raw = _with_retry(oi.chat, system, sb_prompts.storyboard_shots_user(body))
         shots = [s for s in parsing.parse_json_array(raw) if s.get("prompt")]
+        scene_continuity = next(
+            (s.get("continuity") for s in shots if isinstance(s.get("continuity"), dict)), {})
+        scene_continuity = dict(scene_continuity)
+        if scene_costumes:
+            scene_continuity["wardrobe"] = "; ".join(
+                f"{character}: {costume}" for character, costume in scene_costumes.items())
         for i, s in enumerate(shots, 1):
             s["n"] = i
+            visible = set(s.get("characters") or [])
+            mapped = {character: costume for character, costume in scene_costumes.items()
+                      if character in visible}
+            if mapped:
+                s["costumes"] = mapped
+            appearances = {}
+            for character in visible:
+                card = character_cards.get(character) or character_cards.get(
+                    re.sub(r"\s*\(과거\)\s*$", "", character))
+                if not card:
+                    continue
+                detail = ", ".join(str(v).strip() for v in (
+                    card.get("gender"), card.get("age"), card.get("appearance")) if str(v or "").strip())
+                if detail:
+                    appearances[character] = detail
+            if appearances:
+                s["character_appearance"] = appearances
+            # 같은 씬에서는 외형·의상·공간·조명·색감 선언을 한 글자도 바꾸지 않고 반복한다.
+            s["continuity"] = dict(scene_continuity)
         shots_by_scene[num] = shots
     return shots_by_scene
 
@@ -681,13 +786,122 @@ SEMI_REAL_SUFFIX = (
     # ★2026-07-21(실측 — 컷마다 같은 인물의 헤어스타일(묶음/풀림 등)·의상 디테일이 제멋대로
     # 바뀜): 인물/의상 참조 이미지의 role instruction만으로는 힘이 부족해, 프롬프트 본문 끝에도
     # 같은 지시를 명시적으로 반복해 앵커를 강화한다.
-    " Keep this character's hairstyle (including whether hair is tied up or down) and every "
-    "costume detail (color, fit, accessories) IDENTICAL to their reference image in every shot — "
+    " Keep each character's hairstyle (including whether hair is tied up or down) IDENTICAL to "
+    "their identity reference, and every costume detail (color, fit, accessories) IDENTICAL to "
+    "that character's assigned wardrobe reference in every shot — "
     "do not alter hair state or outfit details unless the action/prompt explicitly describes a change."
 )
 
 
-def generate_image_for_shot(shot: dict, work: str | None = None) -> tuple[bytes, float]:
+def _continuity_value(shot: dict, key: str, fallback: str) -> str:
+    continuity = shot.get("continuity") or {}
+    value = continuity.get(key) if isinstance(continuity, dict) else None
+    return str(value).strip() if value else fallback
+
+
+def _shot_continuity_prompt(shot: dict, connected_cut_nums: list[int] | None = None) -> str:
+    """사용자가 지정한 연속성 템플릿을 실제 이미지 프롬프트용 고정 블록으로 채운다."""
+    cut_num = shot.get("n", "?")
+    connected = [int(n) for n in (connected_cut_nums or [])]
+    if connected:
+        connected_text = ", ".join(str(n) for n in connected)
+        opening = f"This is shot {cut_num} from the same continuous scene as shots {connected_text}."
+    else:
+        opening = f"This is shot {cut_num}, the opening visual anchor for this continuous scene."
+
+    appearances = shot.get("character_appearance") or {}
+    if isinstance(appearances, dict) and appearances:
+        character_fallback = "; ".join(f"{name}: {detail}" for name, detail in appearances.items())
+    else:
+        character_fallback = ", ".join(shot.get("characters") or []) or "No visible character."
+
+    assignments = shot.get("costumes") or {}
+    if isinstance(assignments, dict) and assignments:
+        wardrobe_fallback = "; ".join(
+            f"{character}: {costume}" for character, costume in assignments.items())
+    else:
+        wardrobe_fallback = "No registered wardrobe assignment."
+
+    current = shot.get("current_shot") or {}
+    if not isinstance(current, dict):
+        current = {}
+    action = str(current.get("action") or shot.get("caption") or shot.get("prompt") or "").strip()
+    expression = str(current.get("expression") or "Follow the described action without changing identity.").strip()
+    gaze = str(current.get("gaze") or "Follow the described action.").strip()
+    hands = str(current.get("hands") or "Keep hand and prop placement exactly as described in this shot.").strip()
+    camera = str(current.get("camera") or "Follow the shot's specified framing and composition.").strip()
+
+    return f"""CONTINUITY REQUIREMENT:
+
+{opening}
+
+Keep the character identity, hairstyle, wardrobe, accessories, props, location layout, furniture placement, lighting direction, color temperature, color grading, and overall mood exactly identical across every shot.
+
+Only the camera framing, pose, gaze, facial expression, and described action may change.
+
+CHARACTER:
+
+{_continuity_value(shot, "character", character_fallback)}
+
+Preserve the exact same face, hairstyle, apparent age, and body proportions.
+
+WARDROBE:
+
+{_continuity_value(shot, "wardrobe", wardrobe_fallback)}
+
+The wardrobe must remain completely identical.
+
+Do not copy clothing from the character reference.
+
+Do not add, remove, replace, or redesign any clothing or accessories.
+
+PROPS:
+
+{_continuity_value(shot, "props", ", ".join(shot.get("props") or []) or "No fixed prop in frame.")}
+
+Maintain the exact same prop design, condition, hand placement, and environmental position.
+
+Do not add, remove, duplicate, or relocate props.
+
+LOCATION:
+
+{_continuity_value(shot, "location", ", ".join(shot.get("places") or []) or "Use the established scene location.")}
+
+Maintain the exact same architecture, doors, windows, furniture, background objects, and spatial orientation.
+
+Do not mirror or reverse the room.
+
+LIGHTING:
+
+{_continuity_value(shot, "lighting", "Use the established scene lighting without alteration.")}
+
+Maintain the exact same light source, direction, brightness, exposure, shadow direction, and color temperature.
+
+MOOD AND COLOR:
+
+{_continuity_value(shot, "mood_color", "Use the established scene mood and color grade without alteration.")}
+
+Maintain the same emotional atmosphere, white balance, saturation, contrast, black level, and cinematic texture.
+
+CURRENT SHOT:
+
+{action}
+
+Expression: {expression}
+
+Gaze: {gaze}
+
+Hands: {hands}
+
+CAMERA:
+
+{camera}
+
+STYLE:"""
+
+
+def generate_image_for_shot(shot: dict, work: str | None = None,
+                            continuity_refs: list[tuple[int, bytes]] | None = None) -> tuple[bytes, float]:
     """샷 하나의 스틸컷 생성 → (PNG bytes, cost$). work가 주어지면 요소 레지스트리(인물 얼굴·
     장소·소품·의상 참조 이미지)를 shot_refs_with_instructions()로 자동 매칭해 일관성을 유지한다.
     ★2026-07-21: 예전엔 oi.shot_refs()로 참조 URL만 붙이고 각 참조가 얼굴용인지 의상용인지
@@ -696,9 +910,31 @@ def generate_image_for_shot(shot: dict, work: str | None = None) -> tuple[bytes,
     컷마다 흔들리는 원인이었다. 이제 참조별 역할 설명을 프롬프트 본문에 번호 붙여 명시한다.
     프롬프트 끝에 세미리얼리스틱 화풍 지시를 붙여 컷마다 톤이 흔들리지 않게 한다."""
     ref_instructions, refs = oi.shot_refs_with_instructions(work, shot) if work else ("", [])
-    prompt = f"{shot['prompt']}{SEMI_REAL_SUFFIX}"
-    if ref_instructions:
-        prompt = f"{ref_instructions}\n\n{prompt}"
+    ref_lines = [ref_instructions] if ref_instructions else []
+    connected_cut_nums = []
+    for prior_cut_num, prior_png in (continuity_refs or []):
+        if not prior_png:
+            continue
+        refs.append(oi.png_data_url(prior_png))
+        connected_cut_nums.append(prior_cut_num)
+        ref_lines.append(
+            f"Reference image {len(refs)}: approved shot {prior_cut_num} continuity anchor — preserve "
+            "its exact character identity, hairstyle, assigned wardrobe and accessories, prop design "
+            "and position, location geometry and screen direction, lighting, color grade, and mood. "
+            "Apply character continuity only to the same named character appearing in both shots; "
+            "do not introduce absent characters or transfer a face or outfit between characters. "
+            "Do not copy its pose, expression, gaze, action, or camera framing into the current shot.")
+    prompt = f"{_shot_continuity_prompt(shot, connected_cut_nums)}\n{shot['prompt']}{SEMI_REAL_SUFFIX}"
+    assignments = shot.get("costumes") or {}
+    if isinstance(assignments, dict) and assignments:
+        wardrobe = "\n".join(
+            f"- {character} wears '{costume}' exactly; never swap or mix this outfit with another character."
+            for character, costume in assignments.items() if character and costume)
+        if wardrobe:
+            prompt = f"WARDROBE LOCK — character-to-outfit assignment:\n{wardrobe}\n\n{prompt}"
+    if ref_lines:
+        joined_ref_lines = "\n".join(ref_lines)
+        prompt = f"{joined_ref_lines}\n\n{prompt}"
     return _with_retry(oi.generate, prompt, aspect_ratio="9:16", refs=refs)
 
 
@@ -845,7 +1081,7 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
     def _gen_once(image_bytes, prompt):
         # _with_retry 재시도 없이 1회만 — 안전필터는 재시도해도 같은 결과라 낭비
         return hf_video.generate(image_bytes, prompt,
-                                 aspect_ratio="9:16", generate_audio=False)
+                                 aspect_ratio="9:16", generate_audio=True)
 
     def _is_filter(e):
         return "InputImageSensitiveContentDetected" in str(e)
@@ -892,6 +1128,8 @@ def generate_cuts_for_scene(work: str, scene_num: int, shots: list[dict],
         (s.get("scene_num"), s.get("cut_num")): s
         for s in (cached_stills or []) if s.get("image")
     }
+    previous_cut_num = None
+    previous_png = None
     for shot in shots:
         cut_num = shot["n"]
 
@@ -906,7 +1144,12 @@ def generate_cuts_for_scene(work: str, scene_num: int, shots: list[dict],
                 png = oi.data_url_to_png(cached["image"])
             else:
                 notify("이미지 생성 중")
-                png, _img_cost = generate_image_for_shot(shot, work=work)
+                continuity_refs = ([(previous_cut_num, previous_png)]
+                                   if previous_cut_num is not None and previous_png else None)
+                png, _img_cost = generate_image_for_shot(
+                    shot, work=work, continuity_refs=continuity_refs)
+            # 영상화 성공 여부와 무관하게 이 승인/생성 스틸을 다음 컷의 연속성 앵커로 사용한다.
+            previous_cut_num, previous_png = cut_num, png
             # 영상화가 실패해도(안전필터 등) 이미 생성한 스틸은 남겨 재생성 비용 낭비를 막는다.
             try:
                 vp_store.save_still(work, scene_num=scene_num, prompt_summary=shot.get("prompt", ""),
@@ -1055,7 +1298,11 @@ def _prepare_scenes_and_shots(project, episode, job_id, save_fn=None):
     num = episode["num"]
     characters = project.get("characters", [])
     if episode.get("scenes") and episode.get("shots_by_scene"):
-        return _norm_scenes(episode["scenes"]), _norm_shots(episode["shots_by_scene"])
+        scenes = _norm_scenes(episode["scenes"])
+        shots = _restore_costume_assignments(scenes, _norm_shots(episode["shots_by_scene"]))
+        if save_fn:
+            save_fn(shots_by_scene=shots)
+        return scenes, shots
 
     script = episode.get("script")
     if not script:
@@ -1065,7 +1312,8 @@ def _prepare_scenes_and_shots(project, episode, job_id, save_fn=None):
     scenes_plan = parsing.parse_plan_scenes(plan_text)
     if not scenes_plan:
         raise RuntimeError("씬 설계안에서 씬 목록을 파싱하지 못했어요.")
-    conti_full = generate_conti(script, plan_text, scenes_plan, episode=num, characters=characters)
+    conti_full = generate_conti(script, plan_text, scenes_plan, episode=num, characters=characters,
+                                work=work, prior_conti=episode.get("conti_full") or "")
     scenes = parsing.split_scenes(conti_full)
     if not scenes:
         raise RuntimeError("콘티에서 씬 헤더를 찾지 못했어요.")
@@ -1159,7 +1407,8 @@ def generate_stills_for_scene(project: dict, episode: dict, job_id: str, save_fn
         script = episode.get("script")
         jobs.update(job_id, stage=f"씬{scene_num} 콘티 작성 중")
         conti = generate_conti(script, plan_text, [(scene_num, line)], episode=num,
-                               characters=characters)
+                               characters=characters, work=work,
+                               prior_conti=episode.get("conti_full") or "")
         sc = parsing.split_scenes(conti)
         if not sc:
             raise RuntimeError(f"씬{scene_num} 콘티에서 씬 헤더를 찾지 못했어요.")
@@ -1197,11 +1446,22 @@ def generate_stills_for_scene(project: dict, episode: dict, job_id: str, save_fn
 def regenerate_cut_still(project: dict, episode: dict, scene_num: int, cut_num: int) -> dict:
     """미리보기의 특정 컷 이미지만 다시 생성 → 갱신된 still 항목(dict) 반환."""
     work = project["work"]
-    shots_by_scene = _norm_shots(episode.get("shots_by_scene") or {})
+    scenes = _norm_scenes(episode.get("scenes") or [])
+    shots_by_scene = _restore_costume_assignments(
+        scenes, _norm_shots(episode.get("shots_by_scene") or {}))
     shot = next((s for s in (shots_by_scene.get(scene_num) or []) if s.get("n") == cut_num), None)
     if not shot:
         raise RuntimeError(f"씬{scene_num} 컷{cut_num}을 찾을 수 없어요.")
-    png, _cost = generate_image_for_shot(shot, work=work)
+    previous = max(
+        (s for s in (episode.get("scene_stills") or [])
+         if s.get("scene_num") == scene_num and isinstance(s.get("cut_num"), int)
+         and s.get("cut_num") < cut_num and s.get("image")),
+        key=lambda s: s["cut_num"], default=None)
+    continuity_refs = None
+    if previous:
+        continuity_refs = [(previous["cut_num"], oi.data_url_to_png(previous["image"]))]
+    png, _cost = generate_image_for_shot(
+        shot, work=work, continuity_refs=continuity_refs)
     return {"scene_num": scene_num, "cut_num": cut_num, "caption": shot.get("caption", ""),
             "prompt": shot.get("prompt", ""), "image": oi.png_data_url(png), "video_path": None}
 

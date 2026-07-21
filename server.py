@@ -588,7 +588,8 @@ def studio_advance_episode(project_id: str, num: int):
         # 안 보여준다 — 씬설계 완료에서 곧장 샷분해 완료까지 이 한 번의 호출 안에서 처리한다.
         conti_full = generate_conti(episode["script"], episode["plan_text"],
                                     episode["scenes_plan"], episode=num,
-                                    characters=project["characters"])
+                                    characters=project["characters"], work=project["work"],
+                                    prior_conti=episode.get("conti_full") or "")
         scenes = parsing.split_scenes(conti_full)
         if not scenes:
             raise HTTPException(500, "콘티에서 씬 헤더를 찾지 못했어요.")
