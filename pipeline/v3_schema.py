@@ -173,8 +173,14 @@ def parse_scene(header_line: str, scene_body: str) -> dict:
     decl = parse_scene_declarations(scene_body)
     clips = parse_clips(scene_body)
     total_seconds = round(sum(c["declared_seconds"] or 0 for c in clips), 2)
+    # 클립이 실제 제작 단위(각 클립 → 영상 1개)이므로, 헤더 총초와 클립 합이 다르면 클립 합을
+    # 권위값으로 채택한다 — LLM이 헤더 총초를 잘못 더해도(실측) 하드 실패시키지 않는다.
+    declared = header.get("declared_seconds")
+    if clips:
+        declared = total_seconds
     return {
         **header,
+        "declared_seconds": declared,
         **decl,
         "clips": clips,
         "clip_seconds_total": total_seconds,
@@ -211,11 +217,8 @@ def _validate_scene_skeleton_fields(scene: dict) -> list[str]:
     if scene.get("scene_num") is None:
         errors.append("씬 헤더를 'v3.1 형식(■ 씬N · [장소태그] (element_id) · 총초 · 제목)'으로 "
                       "파싱하지 못했어요.")
-    if scene.get("declared_seconds") is not None:
-        clip_total = scene.get("clip_seconds_total", 0)
-        if abs(clip_total - scene["declared_seconds"]) > _TIME_TOLERANCE:
-            errors.append(f"씬 헤더의 총초({scene['declared_seconds']}초)와 클립 길이 합"
-                          f"({clip_total}초)이 안 맞아요.")
+    # 씬 총초 vs 클립 합 불일치는 parse_scene에서 클립 합으로 자동 보정하므로 여기서 검사 안 함
+    # (LLM이 헤더 총초를 잘못 더해도 클립이 제작 단위라 클립 합을 따른다).
     if not scene.get("cast"):
         errors.append("등장 라인(등장: 이름(element_id / 의상: …))이 없거나 못 읽었어요.")
     if not scene.get("mood"):
