@@ -673,22 +673,27 @@ def generate_video_for_clip(work: str, scene_num: int, clip_id: str, png: bytes,
 
 
 def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
-                 continuity_png: bytes | None = None) -> dict:
+                 continuity_png: bytes | None = None,
+                 still_png: bytes | None = None) -> dict:
     """클립 하나를 스틸→영상까지 완주(문서 5단계 씬 내부의 클립 단위 실행). 스틸은 저장(승인 대상),
     영상 실패는 그 클립만 실패로 남기고 스틸은 보존(재생성 비용 방지). 반환: {clip_id, status,
-    still_png, video_path?, error?}."""
+    still_png, video_path?, error?}.
+    still_png가 주어지면(미리보기에서 승인된 스틸) 새로 생성하지 않고 그대로 영상화한다 —
+    미리보기 스틸 재사용으로 이미지 생성 비용·시간을 아낀다(승인 스틸 = 시작 프레임 앵커)."""
     scene_num = scene.get("scene_num")
     clip_id = clip.get("clip_id")
-    try:
-        png, _cost = generate_clip_still(scene, clip, work=work, continuity_png=continuity_png)
-    except Exception as e:
-        return {"clip_id": clip_id, "status": "failed", "still_png": None, "error": str(e)}
-    try:
-        vp_store.save_still(work, scene_num=scene_num,
-                            prompt_summary=(clip.get("label") or ""), png=png,
-                            episode=episode, clip_id=clip_id)
-    except Exception:
-        pass  # 스틸 파일 저장 실패해도 메모리의 png로 영상화는 이어감
+    png = still_png
+    if png is None:
+        try:
+            png, _cost = generate_clip_still(scene, clip, work=work, continuity_png=continuity_png)
+        except Exception as e:
+            return {"clip_id": clip_id, "status": "failed", "still_png": None, "error": str(e)}
+        try:
+            vp_store.save_still(work, scene_num=scene_num,
+                                prompt_summary=(clip.get("label") or ""), png=png,
+                                episode=episode, clip_id=clip_id)
+        except Exception:
+            pass  # 스틸 파일 저장 실패해도 메모리의 png로 영상화는 이어감
     try:
         motion = sb_prompts.clip_motion_prompt(scene, clip)
         path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=episode)
@@ -704,31 +709,42 @@ def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
 
 def produce_scene(work: str, scene: dict, episode: int = 1,
                   prior_handoff: dict | None = None, mood: str = "",
-                  conti_body: str = "", on_progress=None) -> dict:
+                  conti_body: str = "", on_progress=None,
+                  approved_stills: dict[str, bytes] | None = None) -> dict:
     """씬 하나 완주 — 6단계 레퍼런스 → 클립별 스틸·영상(produce_clip) → 핸드오프 생성. 같은 씬의
     직전 클립 승인 스틸을 다음 클립의 연속성 앵커로 넘긴다(규칙 3). 모든 클립 성공 시 state를
-    completed로. 반환: {scene_num, state, clips, handoff}."""
+    completed로. 반환: {scene_num, state, clips, handoff}.
+    approved_stills({clip_id: png})가 있으면 그 클립은 미리보기 승인 스틸을 재사용한다(재생성 X).
+    승인 스틸이 모든 클립에 있으면 레퍼런스 생성도 생략한다(이미 그 스틸에 반영돼 있음)."""
     scene_num = scene.get("scene_num")
+    approved_stills = approved_stills or {}
 
     def notify(clip_id, msg):
         if on_progress:
             on_progress(scene_num, clip_id, msg)
 
-    notify(None, "레퍼런스 준비 중")
-    try:
-        ensure_scene_references(work, scene, mood=mood, conti_body=conti_body)
-    except Exception:
-        pass  # 레퍼런스 생성 실패해도 스틸 생성은 이어감(참조 없이라도)
+    clips = scene.get("clips") or []
+    # 모든 클립 스틸을 재사용하면 레퍼런스 생성이 불필요(스틸에 이미 반영됨) — 비용 절약.
+    all_reused = bool(clips) and all(approved_stills.get(c.get("clip_id")) for c in clips)
+    if not all_reused:
+        notify(None, "레퍼런스 준비 중")
+        try:
+            ensure_scene_references(work, scene, mood=mood, conti_body=conti_body)
+        except Exception:
+            pass  # 레퍼런스 생성 실패해도 스틸 생성은 이어감(참조 없이라도)
 
     clip_results = []
     prev_still = None
-    for clip in scene.get("clips") or []:
-        notify(clip.get("clip_id"), "스틸·영상 생성 중")
-        r = produce_clip(work, scene, clip, episode=episode, continuity_png=prev_still)
+    for clip in clips:
+        cid = clip.get("clip_id")
+        reused = approved_stills.get(cid)
+        notify(cid, "영상화 중(승인 스틸)" if reused else "스틸·영상 생성 중")
+        r = produce_clip(work, scene, clip, episode=episode,
+                         continuity_png=prev_still, still_png=reused)
         if r.get("still_png"):
             prev_still = r["still_png"]  # 다음 클립 연속성 앵커
         clip_results.append(r)
-        notify(clip.get("clip_id"), r["status"])
+        notify(cid, r["status"])
 
     handoff = v3_schema.build_scene_handoff(scene, prior_handoff)
     all_ok = bool(clip_results) and all(r["status"] == "ok" for r in clip_results)
@@ -779,16 +795,37 @@ def produce_episode_v3(work: str, script: str, skeleton_scenes: list[tuple[int, 
             results.append({"scene_num": scene_num, "state": "completed", "skipped": True})
             continue
 
-        if on_progress:
-            on_progress(scene_num, None, "상세 콘티 작성 중")
-        scene, conti_text, errors = build_scene_blocks(
-            skeleton_text, script, prior_handoff=handoff, characters=characters, work=work)
+        # 미리보기(preview_scene_v3)에서 이미 상세 콘티·승인 스틸을 만든 씬이면 재사용한다 —
+        # 상세 블록 재생성(LLM)과 스틸 재생성(이미지)을 건너뛰어 비용·시간을 아낀다.
+        preview = load_scene(scene_num) if load_scene else None
+        scene = conti_text = None
+        errors = []
+        approved_stills = {}
+        if preview and preview.get("conti_text"):
+            parsed = parsing.split_scenes(preview["conti_text"])
+            if parsed:
+                _, hdr, body = parsed[0]
+                scene = v3_schema.parse_scene(hdr, body)
+                conti_text = preview["conti_text"]
+                errors = v3_schema.validate_scene(scene)
+                for s in preview.get("stills") or []:
+                    if s.get("clip_id") and s.get("image"):
+                        try:
+                            approved_stills[s["clip_id"]] = oi.data_url_to_png(s["image"])
+                        except Exception:
+                            pass
+        if scene is None:
+            if on_progress:
+                on_progress(scene_num, None, "상세 콘티 작성 중")
+            scene, conti_text, errors = build_scene_blocks(
+                skeleton_text, script, prior_handoff=handoff, characters=characters, work=work)
         if errors or not scene:
             results.append({"scene_num": scene_num, "state": "failed", "errors": errors})
             break  # 연속성 유지 위해 이 씬에서 멈춤
 
         sr = produce_scene(work, scene, episode=episode, prior_handoff=handoff,
-                           mood=mood, conti_body=conti_text, on_progress=on_progress)
+                           mood=mood, conti_body=conti_text, on_progress=on_progress,
+                           approved_stills=approved_stills)
         scene_plan = [_clip_plan_segment(scene, clip, cr["video_path"])
                       for clip, cr in zip(scene.get("clips") or [], sr["clips"])
                       if cr.get("video_path")]
