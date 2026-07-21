@@ -18,6 +18,7 @@ from pipeline.orchestrator import (
     generate_episode_plan_summary, generate_episode_summary, generate_key_scene_image,
     generate_pitch_card, generate_scene_plan, generate_scene_stills, generate_script,
     generate_shots_by_scene, generate_synopsis, produce_episode_video, run_full_pipeline,
+    studio_script_bible,
 )
 
 app = FastAPI()
@@ -319,9 +320,18 @@ def studio_generate_script(project_id: str, num: int):
     idea = project.get("idea") or project["logline"]
     ep_char_ids = set(episode.get("character_ids") or [])
     chars = [c for c in project["characters"] if c.get("id") in ep_char_ids] or project["characters"]
-    # 요약이 있으면 그걸 뼈대로 대본을 쓴다(요약 먼저 → 대본 흐름).
+    summary = episode.get("summary") or ""
+    if not summary:
+        summary = generate_episode_plan_summary(
+            num, project.get("logline", ""), project.get("synopsis", ""),
+            project.get("characters", []))
+        studio.update_episode(project_id, num, summary=summary)
+        episode["summary"] = summary
+        project["episodes"] = [episode if ep.get("num") == num else ep
+                               for ep in project.get("episodes", [])]
+    bible = studio_script_bible(project, num)
     script = generate_script(idea, project["logline"], episode=num, characters=chars,
-                             summary=episode.get("summary") or "")
+                             summary=summary, bible=bible)
     studio.update_episode(project_id, num, script=script)
     return studio.get_episode(project_id, num)
 
@@ -408,12 +418,19 @@ def studio_advance_episode(project_id: str, num: int):
     idea = project.get("idea") or project["logline"]
 
     if stage == "대본 대기":
+        plan_summary = episode.get("summary") or generate_episode_plan_summary(
+            num, project.get("logline", ""), project.get("synopsis", ""),
+            project.get("characters", []))
+        episode["summary"] = plan_summary
+        project["episodes"] = [episode if ep.get("num") == num else ep
+                               for ep in project.get("episodes", [])]
+        bible = studio_script_bible(project, num)
         script = generate_script(idea, project["logline"], episode=num,
-                                 characters=project["characters"])
+                                 characters=project["characters"], summary=plan_summary, bible=bible)
         try:
             summary = generate_episode_summary(script)
         except Exception:
-            summary = ""  # 실패해도 대본 완료 자체는 막지 않음 — 화면에서 빈 상태로 보임
+            summary = plan_summary
         studio.update_episode(project_id, num, script=script, summary=summary, stage="대본 완료")
     elif stage == "대본 완료":
         plan_text = generate_scene_plan(episode["script"], episode=num,
