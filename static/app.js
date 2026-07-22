@@ -53,17 +53,44 @@ function renderScriptMarkdown(text) {
   }).join("");
 }
 
-// "AI 생성" 버튼 첫 클릭 = 의견 입력창만 펼치고 대기, 이미 펼쳐진 상태에서 클릭 = 그 값으로 진행.
-// noteInputId가 hidden이면 보여주고 포커스만 준 뒤 false(진행하지 말 것)를 반환한다.
+// "AI 생성" 버튼 첫 클릭 = 의견 입력창(툴팁 박스)만 펼치고 대기, 이미 펼쳐진 상태에서 클릭(또는
+// 툴팁 안 "생성" 버튼) = 그 값으로 진행. 툴팁 박스는 textarea를 감싼 `${id}Box` — 없으면(구
+// 마크업 호환) textarea 자체를 박스로 취급한다.
+function _noteBox(noteInputId) {
+  return $(noteInputId + "Box") || $(noteInputId);
+}
+
 function revealNoteThenProceed(noteInputId) {
-  const el = $(noteInputId);
-  if (el.classList.contains("hidden")) {
-    el.classList.remove("hidden");
-    el.focus();
+  const box = _noteBox(noteInputId);
+  if (box.classList.contains("hidden")) {
+    box.classList.remove("hidden");
+    $(noteInputId).focus();
     return false;
   }
   return true;
 }
+
+// AI 생성 성공 후(또는 "취소" 클릭 시) 툴팁을 닫고 입력했던 의견을 지운다(다음에 열었을 때
+// 이전 내용이 남아있지 않게).
+function hideNote(noteInputId) {
+  $(noteInputId).value = "";
+  _noteBox(noteInputId).classList.add("hidden");
+}
+
+// 툴팁 안 "취소"/"생성" 버튼 — 이벤트 위임(툴팁 4곳이 서로 다른 컨테이너에 있어 공통 리스너로).
+document.addEventListener("click", (e) => {
+  const cancelBtn = e.target.closest(".gen-note-cancel-btn");
+  if (cancelBtn) {
+    hideNote(cancelBtn.dataset.note);
+    return;
+  }
+  const submitBtn = e.target.closest(".gen-note-submit-btn");
+  if (submitBtn) {
+    // 실제 생성 로직은 바깥 "🤖 AI 생성" 버튼 핸들러에 있다 — 툴팁이 이미 펼쳐진 상태이므로
+    // revealNoteThenProceed가 즉시 true를 반환해 그대로 생성으로 진행된다(중복 구현 방지).
+    $(submitBtn.dataset.trigger).click();
+  }
+});
 
 const views = {
   input: $("inputView"),
@@ -600,6 +627,7 @@ $("genSynopsisBtn").addEventListener("click", async () => {
       throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
     }
     renderStudio(await res.json());
+    hideNote("synopsisNoteInput");
   } catch (e) {
     alert(`전체 줄거리 AI 생성 실패: ${e.message}`);
   } finally {
@@ -1021,6 +1049,7 @@ $("genSummaryBtn").addEventListener("click", async () => {
     }
     await loadStudio(studioProjectId);
     renderEpisodeDetail();
+    hideNote("summaryNoteInput");
   } catch (e) { alert(`요약 AI 생성 실패: ${e.message}`); }
   finally { btn.disabled = false; btn.textContent = original; }
 });
@@ -1066,6 +1095,7 @@ $("genScriptBtn").addEventListener("click", async () => {
     }
     await loadStudio(studioProjectId);
     renderEpisodeDetail();
+    hideNote("scriptNoteInput");
   } catch (e) { alert(`대본 AI 생성 실패: ${e.message}`); }
   finally { btn.disabled = false; btn.textContent = original; }
 });
@@ -1272,6 +1302,7 @@ $("genCharacterBtn").addEventListener("click", async () => {
     $("charLineInput").value = f.line || "";
     $("charAppearanceInput").value = f.appearance || "";
     $("charDescriptionInput").value = f.description || "";
+    hideNote("charHintInput");
   } catch (e) {
     alert(`캐릭터 AI 생성 실패: ${e.message}`);
   } finally {

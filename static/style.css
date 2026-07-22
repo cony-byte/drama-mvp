@@ -224,7 +224,9 @@ button#finalizeBtn { margin-top: 4px; }
   resize: vertical;
 }
 
-/* AI 생성 버튼 옆 의견 입력 — 레이아웃을 밀지 않는 툴팁(말풍선)으로 버튼 아래에 붕 뜬다. */
+/* AI 생성 버튼 옆 의견 입력 — 레이아웃을 밀지 않는 툴팁(말풍선)으로 버튼 아래에 붕 뜬다.
+   ★2026-07-22: textarea 하나만 떠 있고 취소/생성 버튼이 없어서, "이 버튼을 다시 눌러야
+   진짜 생성된다"는 게 안 보이는 문제(사용자 리포트) — 툴팁 안에 취소/생성 버튼을 넣는다. */
 .gen-note-tooltip-anchor { position: relative; }
 .gen-note-input {
   position: absolute;
@@ -232,19 +234,30 @@ button#finalizeBtn { margin-top: 4px; }
   right: 0;
   width: 240px;
   max-width: 70vw;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--accent);
   background: var(--card);
+  z-index: 20;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.gen-note-textarea {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--text);
   font-size: 13px;
   font-family: inherit;
   line-height: 1.5;
   resize: vertical;
-  z-index: 20;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
-.gen-note-input::placeholder { color: var(--muted); }
+.gen-note-textarea:focus { outline: none; }
+.gen-note-textarea::placeholder { color: var(--muted); }
+.gen-note-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
 #charactersBox {
   display: flex;
