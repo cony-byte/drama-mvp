@@ -897,18 +897,25 @@ def produce_scene(work: str, scene: dict, episode: int = 1,
         except Exception:
             pass  # 레퍼런스 생성 실패해도 스틸 생성은 이어감(참조 없이라도)
 
-    clip_results = []
-    prev_still = None
-    for clip in clips:
+    # ★2026-07-22: 클립 영상화를 병렬로(레이트리밋 안 걸릴 정도의 소수 동시). 순차 대비 전체 영상
+    # 시간 크게 단축. 병렬이라 스틸 연속성 체이닝(continuity_png)은 생략 — 전체 영상은 미리보기
+    # 승인 스틸을 재사용하므로 스틸 재생성 자체가 없어 체이닝이 무의미하다.
+    clip_results: list = [None] * len(clips)
+
+    def _one_clip(idx_clip):
+        idx, clip = idx_clip
         cid = clip.get("clip_id")
         reused = approved_stills.get(cid)
         notify(cid, "영상화 중(승인 스틸)" if reused else "스틸·영상 생성 중")
         r = produce_clip(work, scene, clip, episode=episode,
-                         continuity_png=prev_still, still_png=reused, characters=characters)
-        if r.get("still_png"):
-            prev_still = r["still_png"]  # 다음 클립 연속성 앵커
-        clip_results.append(r)
+                         still_png=reused, characters=characters)
+        clip_results[idx] = r
         notify(cid, r["status"])
+
+    vworkers = max(1, min(getattr(sb_config, "OPENROUTER_VIDEO_WORKERS", 2), len(clips) or 1))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=vworkers) as _vex:
+        list(_vex.map(_one_clip, list(enumerate(clips))))
+    clip_results = [r for r in clip_results if r]
 
     handoff = v3_schema.build_scene_handoff(scene, prior_handoff)
     all_ok = bool(clip_results) and all(r["status"] == "ok" for r in clip_results)
