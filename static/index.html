@@ -237,10 +237,10 @@
       <button id="cancelScriptBtn" type="button">취소</button>
     </div>
 
-    <button id="makeDramaBtn" type="button">🎬 장면 미리보기 만들기</button>
-    <!-- ★2026-07-22: co-writer-bot 샷 기반 흐름으로 전환 — v3.1 클립 엔진 미리보기 진입점 숨김
-         (엔드포인트/코드는 남겨두되 UI에서만 제거). 샷 흐름: makeDramaBtn(미리보기) → 이 장면들로 영상 만들기. -->
-    <button id="v3PreviewBtn" type="button" class="hidden">✨ v3.1 엔진으로 미리보기</button>
+    <!-- ★2026-07-22: v3.1 엔진만 남김 — 구 샷 파이프라인 진입점(장면 미리보기/이 장면들로 영상)은
+         UI에서 숨김(핸들러·엔드포인트는 남겨둠). v3.1 미리보기가 유일한 진입점. -->
+    <button id="makeDramaBtn" type="button" class="hidden">🎬 장면 미리보기 만들기</button>
+    <button id="v3PreviewBtn" type="button">🎬 드라마 만들기</button>
     <button id="closeEpisodeDetailBtn" type="button">↩️ 스튜디오로 돌아가기</button>
   </section>
 
@@ -249,8 +249,8 @@
     <p class="modal-hint">씬별 주요 장면을 스틸컷으로 만들었어요.</p>
     <div id="stillsList"></div>
     <button id="nextSceneBtn" type="button" class="hidden">+ 다음 씬 만들기</button>
-    <button id="makeVideoFromStillsBtn" type="button">🎬 이 장면들로 영상 만들기</button>
-    <button id="v3ProduceBtn" type="button" class="hidden">✨ v3.1로 영상 만들기 (전체 자동)</button>
+    <button id="makeVideoFromStillsBtn" type="button" class="hidden">🎬 이 장면들로 영상 만들기</button>
+    <button id="v3ProduceBtn" type="button">🎬 영상 만들기 (전체 자동)</button>
     <p class="video-note">컷마다 영상을 만들어 합치느라 몇 분 걸려요. 완성되면 영상이 재생됩니다.</p>
     <button id="stillsBackBtn" type="button">↩️ 화면으로 돌아가기</button>
   </section>

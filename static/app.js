@@ -762,7 +762,9 @@ function startJob(endpoint, mode, prepMsg, query) {
 // "+ 다음 씬 만들기" 버튼으로 사용자가 원할 때마다 다음 씬을 하나씩 추가한다.
 // v3.1 엔진(scene→clip→block) 미리보기/제작 중인지. true면 "다음 씬"·"영상 만들기"가 v3
 // 엔드포인트(v3/preview-scene, v3/produce)로 라우팅되고 스틸뷰에서 v3 제작 버튼을 보여준다.
-let v3Mode = false;
+// ★2026-07-22: v3.1 엔진만 남겨 항상 true(구 샷 경로 UI 제거). 구 makeDramaBtn 핸들러는
+// 숨겨진 채 남아있고 트리거되지 않으므로 v3Mode를 false로 되돌리는 경로가 없다.
+let v3Mode = true;
 
 function _setV3Buttons(on) {
   v3Mode = on;
