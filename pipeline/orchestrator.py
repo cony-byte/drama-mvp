@@ -1120,31 +1120,39 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
         except Exception:
             pass
 
+        # ★2026-07-22(사용자 지시): 스틸은 '컷(블록)' 단위로, 영상은 '클립(블록 묶음)' 단위로.
+        # → 스틸을 클립당 1장이 아니라 블록(구도 컷)마다 1장 만든다. cut_num은 씬 전체 순번(1..N),
+        # clip_id는 소속 클립(영상화가 클립 단위로 묶이게). 생성 단계에 컷 진행(3/5)을 노출.
         stills = []
         prev_still = None
+        total_cuts = sum(len(c.get("blocks") or []) for c in (scene.get("clips") or []))
+        cut_idx = 0
         for clip in scene.get("clips") or []:
             clip_id = clip.get("clip_id")
-            jobs.update(job_id, stage=f"씬{scene_num} {clip_id} 대표 스틸 생성 중")
-            try:
-                png, _cost = generate_clip_still(scene, clip, work=work, continuity_png=prev_still,
-                                                 characters=characters)
-            except Exception:
-                continue  # 이 클립 스틸 실패 — 건너뛰고 다음 클립
-            prev_still = png
-            try:
-                vp_store.save_still(work, scene_num=scene_num,
-                                    prompt_summary=clip.get("label", ""), png=png,
-                                    episode=num, clip_id=clip_id)
-            except Exception:
-                pass
-            stills.append({
-                "scene_num": scene_num, "cut_num": _clip_ordinal(clip_id), "clip_id": clip_id,
-                "caption": clip.get("label", ""), "image": oi.png_data_url(png),
-                "video_path": None, "representative": True,
-            })
-            # ★2026-07-22: 생성되는 스틸을 하나씩 노출 — 이전 씬 스틸 + 이번 씬 진행분을 job.stills에
-            # 즉시 반영해 프런트 폴링이 완성된 컷부터 바로 보여주게 한다(전부 끝날 때까지 안 기다림).
-            jobs.update(job_id, stills=_v3_all_stills(v3map) + stills)
+            rep = v3_schema.representative_block(clip)
+            for bi, block in enumerate(clip.get("blocks") or []):
+                cut_idx += 1
+                jobs.update(job_id, stage=f"씬{scene_num} 컷 {cut_idx}/{total_cuts} 스틸 생성 중")
+                try:
+                    png, _cost = generate_clip_still(scene, clip, work=work, block=block,
+                                                     continuity_png=prev_still, characters=characters)
+                except Exception:
+                    continue  # 이 컷 스틸 실패 — 건너뛰고 다음 컷
+                prev_still = png
+                try:
+                    vp_store.save_still(work, scene_num=scene_num,
+                                        prompt_summary=clip.get("label", ""), png=png,
+                                        episode=num, clip_id=f"{clip_id}-{bi + 1}")
+                except Exception:
+                    pass
+                stills.append({
+                    "scene_num": scene_num, "cut_num": cut_idx, "clip_id": clip_id,
+                    "block_index": bi, "caption": (block.get("description") or clip.get("label") or ""),
+                    "image": oi.png_data_url(png), "video_path": None,
+                    "representative": block is rep,  # 이 클립 영상의 시작 프레임 후보
+                })
+                # 생성되는 스틸을 하나씩 노출(이전 씬 + 이번 씬 진행분).
+                jobs.update(job_id, stills=_v3_all_stills(v3map) + stills)
 
         v3map[scene_num] = {
             "scene_num": scene_num, "state": "stills_ready", "conti_text": conti_text,
@@ -2309,15 +2317,22 @@ def videoize_cut_job(project: dict, episode: dict, job_id: str, save_fn=None, *,
     num = episode["num"]
     try:
         project_setup.ensure_project(work)
-        still = next((s for s in (episode.get("scene_stills") or [])
+        all_stills = episode.get("scene_stills") or []
+        still = next((s for s in all_stills
                      if s.get("scene_num") == scene_num and s.get("cut_num") == cut_num and s.get("image")),
                     None)
         if not still:
             raise RuntimeError("이 컷의 스틸이 없어요. 먼저 이미지를 만들어주세요.")
-        png = oi.data_url_to_png(still["image"])
         jobs.update(job_id, stage="영상화 중")
         note = (note or "").strip()
         clip_id = still.get("clip_id")
+        # ★2026-07-22: 영상은 '클립(블록 묶음)' 단위 — 어느 컷(블록) 스틸을 눌러도 그 클립의 대표
+        # (첫) 블록 스틸을 시작 프레임으로 삼아 클립 전체를 애니메이트한다. 대표가 없으면 클릭한 컷.
+        seed = still
+        if clip_id:
+            seed = next((s for s in all_stills if s.get("clip_id") == clip_id
+                        and s.get("representative") and s.get("image")), still)
+        png = oi.data_url_to_png(seed["image"])
         if clip_id:  # v3 클립 — 그 클립의 멀티샷 모션 프롬프트로 영상화(구 shots_by_scene 무시)
             scene, clip = _find_v3_scene_clip(episode, scene_num, clip_id)
             if not clip:
