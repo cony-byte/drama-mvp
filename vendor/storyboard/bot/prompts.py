@@ -1206,14 +1206,22 @@ def _handoff_lines(handoff: dict | None) -> str:
 
 def scene_blocks_user(scene_skeleton: str, script: str,
                       prior_handoff: dict | None = None,
-                      error_feedback: str = "") -> str:
+                      error_feedback: str = "",
+                      synopsis: str = "", summary: str = "") -> str:
     """씬 뼈대(헤더·선언·클립 마커) + 대본 → 그 씬의 상세 블록을 채워 달라는 유저 프롬프트.
+    synopsis(전체 줄거리)·summary(이번 화 요약)를 주면 맥락으로 앞에 붙인다(인물 동기·아크 반영).
     error_feedback가 있으면 직전 생성의 v3.1 검증 오류를 붙여 재생성(부분 재작성)에 쓴다."""
     parts = [
         "아래 [씬 뼈대]의 클립마다 [N초] 블록을 채워 v3.1 상세 콘티로 완성하라. 헤더·선언·클립 "
         "마커와 그 초는 그대로 두고 블록만 채운다. 각 클립의 블록 초 합 = 클립 선언 초.",
-        f"\n[씬 뼈대]\n{scene_skeleton}",
     ]
+    if synopsis and synopsis.strip():
+        parts.append("\n[전체 줄거리 — 이 작품의 큰 흐름·인물 관계·아크. 이 씬이 그 안에서 어디쯤인지 "
+                     "감안해 인물의 동기·감정을 자연스럽게]\n" + synopsis.strip())
+    if summary and summary.strip():
+        parts.append("\n[이번 화 요약 — 이 화의 사건 흐름·엔딩. 이 씬이 그 중 어느 대목인지 맥락으로]\n"
+                     + summary.strip())
+    parts.append(f"\n[씬 뼈대]\n{scene_skeleton}")
     handoff = _handoff_lines(prior_handoff)
     if handoff:
         parts.append("\n[직전 씬 상태 — 이 씬 첫 블록의 자세로 이어받아라(같은 시간·장소일 때). "

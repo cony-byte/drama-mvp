@@ -573,15 +573,18 @@ def generate_scene_blocks(scene_skeleton: str, script: str,
                           prior_handoff: dict | None = None,
                           characters: list[dict] | None = None,
                           work: str | None = None,
-                          error_feedback: str = "") -> str:
+                          error_feedback: str = "",
+                          synopsis: str = "", summary: str = "") -> str:
     """5단계: 씬 뼈대 하나 + 대본 → 그 씬의 상세 블록([N초] 구도/자세/동작/소리)을 채운 콘티 텍스트.
+    synopsis(전체 줄거리)·summary(이번 화 요약)를 주면 맥락으로 함께 넣는다(인물 동기·아크 반영).
     error_feedback가 있으면 직전 검증 오류를 프롬프트에 붙여 재생성한다(부분 재작성)."""
     sys_prompt = sb_prompts.scene_blocks_system(
         bible=characters_bible(characters),
         known_places=_element_names_for_prompt(work, "place") or None,
         known_costumes=_element_names_for_prompt(work, "costume") or None)
     user = sb_prompts.scene_blocks_user(
-        scene_skeleton, script, prior_handoff=prior_handoff, error_feedback=error_feedback)
+        scene_skeleton, script, prior_handoff=prior_handoff, error_feedback=error_feedback,
+        synopsis=synopsis, summary=summary)
     return _with_retry(_sb_complete, sys_prompt, user).strip()
 
 
@@ -589,7 +592,8 @@ def build_scene_blocks(scene_skeleton: str, script: str,
                        prior_handoff: dict | None = None,
                        characters: list[dict] | None = None,
                        work: str | None = None,
-                       max_attempts: int = 3) -> tuple[dict | None, str, list[str]]:
+                       max_attempts: int = 3,
+                       synopsis: str = "", summary: str = "") -> tuple[dict | None, str, list[str]]:
     """씬 상세 블록을 생성 + v3_schema로 파싱·전체 검증(validate_scene: 블록 합 일치까지)까지 수행.
     검증 실패 시 오류를 피드백으로 붙여 max_attempts까지 재생성(문서 5단계 '자동 검증/부분 재생성',
     셀프체크 규칙 21 '어기면 다시 써서 통과'). 반환: (scene_dict, conti_text, errors).
@@ -602,7 +606,8 @@ def build_scene_blocks(scene_skeleton: str, script: str,
     for _ in range(max_attempts):
         conti_text = generate_scene_blocks(
             scene_skeleton, script, prior_handoff=prior_handoff,
-            characters=characters, work=work, error_feedback=feedback)
+            characters=characters, work=work, error_feedback=feedback,
+            synopsis=synopsis, summary=summary)
         parsed = parsing.split_scenes(conti_text)
         if not parsed:
             errors = ["씬 헤더(■ 씬N …)를 찾지 못했어요 — 출력이 v3.1 씬 형식이 아니에요."]
@@ -949,7 +954,8 @@ def _clip_plan_segment(scene: dict, clip: dict, video_path: str) -> dict:
 def produce_episode_v3(work: str, script: str, skeleton_scenes: list[tuple[int, str]],
                        episode: int = 1, characters: list[dict] | None = None, mood: str = "",
                        is_completed=None, save_scene=None, load_scene=None,
-                       on_progress=None, prior_handoff: dict | None = None) -> dict:
+                       on_progress=None, prior_handoff: dict | None = None,
+                       synopsis: str = "", summary: str = "") -> dict:
     """v3.1 화 전체를 씬 순차로 완주. skeleton_scenes = scene_skeleton_texts()의 [(씬번호, 뼈대)].
     각 씬: build_scene_blocks(5단계) → produce_scene(6~8단계) → handoff → save_scene(9단계).
     is_completed(scene_num)가 True면 그 씬은 건너뛰고 저장된 handoff/plan을 load_scene으로 이어받아
@@ -991,7 +997,8 @@ def produce_episode_v3(work: str, script: str, skeleton_scenes: list[tuple[int, 
             if on_progress:
                 on_progress(scene_num, None, "상세 콘티 작성 중")
             scene, conti_text, errors = build_scene_blocks(
-                skeleton_text, script, prior_handoff=handoff, characters=characters, work=work)
+                skeleton_text, script, prior_handoff=handoff, characters=characters, work=work,
+                synopsis=synopsis, summary=summary)
             if not errors and scene:
                 _save_conti_for_review(work, episode, scene_num, conti_text)  # 검수용 텍스트 파일
         if errors or not scene:
@@ -1097,7 +1104,8 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
         jobs.update(job_id, stage=f"씬{scene_num} 상세 콘티 작성 중")
         scene, conti_text, errors = build_scene_blocks(
             skel[scene_num], script, prior_handoff=prior_handoff,
-            characters=characters, work=work)
+            characters=characters, work=work,
+            synopsis=project.get("synopsis") or "", summary=episode.get("summary") or "")
         if errors or not scene:
             raise RuntimeError(f"씬{scene_num} 콘티 검증 실패: " + " / ".join(errors or ["파싱 실패"]))
         _save_conti_for_review(work, num, scene_num, conti_text)  # 검수용 텍스트 파일로 남김
@@ -1188,7 +1196,8 @@ def produce_episode_v3_job(project: dict, episode: dict, job_id: str, save_fn=No
         result = produce_episode_v3(
             work, script, skel, episode=num, characters=characters, mood=mood,
             is_completed=is_completed, save_scene=save_scene, load_scene=load_scene,
-            on_progress=on_progress)
+            on_progress=on_progress,
+            synopsis=project.get("synopsis") or "", summary=episode.get("summary") or "")
 
         jobs.update(job_id, stage="합본 중")
         path = compile_episode_v3(work, idea, result["plan"], episode_title=f"{num}화")
@@ -1612,74 +1621,43 @@ STYLE:"""
 
 
 def generate_image_for_shot(shot: dict, work: str | None = None,
-                            continuity_refs: list[tuple[int, bytes]] | None = None) -> tuple[bytes, float]:
-    """샷 하나의 스틸컷 생성 → (PNG bytes, cost$). work가 주어지면 요소 레지스트리(인물 얼굴·
-    장소·소품·의상 참조 이미지)를 shot_refs_with_instructions()로 자동 매칭해 일관성을 유지한다.
-    ★2026-07-21: 예전엔 oi.shot_refs()로 참조 URL만 붙이고 각 참조가 얼굴용인지 의상용인지
-    설명이 전혀 없었다(_ROLE_INSTRUCTIONS/shot_ref_entries가 정의만 되고 실제로는 아무 데도
-    안 쓰이던 죽은 코드였음, 실측 확인) — 생성기가 참조를 뒤섞어 써서 인물 얼굴·의상·헤어가
-    컷마다 흔들리는 원인이었다. 이제 참조별 역할 설명을 프롬프트 본문에 번호 붙여 명시한다.
-    프롬프트 끝에 세미리얼리스틱 화풍 지시를 붙여 컷마다 톤이 흔들리지 않게 한다."""
-    ref_instructions, refs = oi.shot_refs_with_instructions(work, shot) if work else ("", [])
-    ref_lines = [ref_instructions] if ref_instructions else []
+                            continuity_refs: list[tuple[int, bytes]] | None = None,
+                            feedback: str = "") -> tuple[bytes, float]:
+    """샷 하나의 스틸컷 생성 → (PNG bytes, cost$).
+
+    ★2026-07-22(co-writer-bot HANDOFF_실사화스틸컷프롬프트 이식 — 프롬프트 싹 갈아엎음):
+    프롬프트 조립 순서 = ① 화풍(맨 앞) + 컷 프롬프트 → ② 연속성 앵커(직전 컷) → ③
+    reference_priority_block(참조별 역할 분리 + 성별 앵커 + 소유 명시 + 인물/의상 2개↑면 STRICT
+    WARDROBE SEPARATION으로 의상 오염 방지) → ④ 사용자 지시(feedback, 최우선·맨 끝).
+    참조 순서 = [등록 요소 참조(costume-first/focus-char), 연속성 직전 컷]. 화풍을 맨 앞에 둬야
+    촬영장·카메라 묘사 컷에서 화풍이 안 밀린다. 의상은 '빼는' 게 아니라 '묶어서' 해결."""
+    ref_entries = oi.shot_ref_entries(work, shot) if work else []
+    refs = [u for (_role, u, *_rest) in ref_entries]
+    role_block = oi.reference_priority_block(ref_entries) if ref_entries else ""
+
     connected_cut_nums = []
     for prior_cut_num, prior_png in (continuity_refs or []):
         if not prior_png:
             continue
         refs.append(oi.png_data_url(prior_png))
         connected_cut_nums.append(prior_cut_num)
-        ref_lines.append(
-            f"Reference image {len(refs)}: approved shot {prior_cut_num} continuity anchor — preserve "
-            "its exact character identity, hairstyle, assigned wardrobe and accessories, prop design "
-            "and position, location geometry and screen direction, lighting, color grade, and mood. "
-            "Apply character continuity only to the same named character appearing in both shots; "
-            "do not introduce absent characters or transfer a face or outfit between characters. "
-            "Do not copy its pose, expression, gaze, action, or camera framing into the current shot.")
-    prompt = f"{_shot_continuity_prompt(shot, connected_cut_nums)}\n{shot['prompt']}{SEMI_REAL_SUFFIX}"
-    # ★2026-07-22: 의상 뒤바뀜(한 인물이 다른 인물 옷을 입는 사고) 수정 — "적용 금지"(부정)만으론
-    # 부족해, 인물↔의상을 positive로 강하게 묶고(각 의상의 시각 특징 텍스트도 함께), 2인 이상이면
-    # 서로의 옷을 못 입게 쌍방 부정 제약을 명시하고, 이 매핑을 프롬프트 앞·뒤에 반복한다.
-    assignments = shot.get("costumes") or {}
-    if isinstance(assignments, dict) and assignments:
-        items = [(c, o) for c, o in assignments.items() if c and o]
-        if items:
-            lines = []
-            for character, costume in items:
-                desc = ""
-                if work:
-                    el = oi.resolve_element(work, costume)
-                    d = (el.get("description") or "").strip() if el else ""
-                    if d:
-                        desc = f" ({d})"
-                lines.append(f"- {character} wears ONLY the outfit '{costume}'{desc}; this outfit "
-                             f"belongs exclusively to {character}.")
-            if len(items) >= 2:
-                for character, _costume in items:
-                    others = [f"{c2}'s '{o2}'" for c2, o2 in items if c2 != character]
-                    lines.append(f"- {character} must never wear {', '.join(others)}.")
-            lines.append("- Do not swap, merge, blend, duplicate, or transfer clothing between "
-                         "characters. Each character keeps their own separate wardrobe.")
-            reminder = ("REMINDER — strict wardrobe: "
-                        + "; ".join(f"{c} = '{o}' only" for c, o in items)
-                        + ". Never transfer clothing between characters.")
-            prompt = ("WARDROBE LOCK — strict character-to-outfit assignment:\n"
-                      + "\n".join(lines) + f"\n\n{prompt}\n\n{reminder}")
-    # ★2026-07-22: 등록 의상이 없어도(씬 헤더 '⚠ 미등록') 캐릭터 appearance(머리·눈·옷차림 서술)를
-    # 인물별로 묶어 못박는다 — 이게 없으면 옷 정보가 프롬프트에 전혀 안 실려, 모델이 옷을 지어내
-    # 화면 초점 인물에게 다른 인물의 옷(예: 알바생 유니폼)을 입히는 사고가 남. 얼굴 참조가 있어도
-    # 참조 사진 속 옷을 인물 간에 옮겨 입히지 못하도록 "각자 것 유지" 가드를 함께 건다.
-    appearances = shot.get("appearances") or {}
-    if isinstance(appearances, dict):
-        appearance_items = [(n, a) for n, a in appearances.items() if n and a]
-        if appearance_items:
-            app_lines = [f"- {name}: {appr}" for name, appr in appearance_items]
-            guard = ("각 서술은 그 이름의 인물에게만 적용한다. 인물의 머리·얼굴·옷차림을 서로 "
-                     "바꾸거나 섞지 말 것 — 특히 한 인물의 옷을 다른 인물에게 입히지 마라.")
-            prompt = ("등장인물별 외모·의상(이름별 고정):\n" + "\n".join(app_lines)
-                      + f"\n{guard}\n\n{prompt}")
-    if ref_lines:
-        joined_ref_lines = "\n".join(ref_lines)
-        prompt = f"{joined_ref_lines}\n\n{prompt}"
+
+    # ① 화풍(맨 앞) + 컷 프롬프트
+    prompt = f"{SEMI_REAL_SUFFIX.strip()} {shot['prompt']}"
+    # ② 연속성 앵커(직전 컷 이미지가 붙었을 때)
+    if connected_cut_nums:
+        prompt += ("\n\n" + _shot_continuity_prompt(shot, connected_cut_nums)
+                   + "\n(The continuity anchor is the LAST attached reference image — preserve its "
+                   "character identity, hairstyle, wardrobe, location and lighting; do not copy its "
+                   "pose, expression, or camera framing.)")
+    # ③ 참조 역할 분리 + 의상 오염 방지
+    if role_block:
+        prompt += f"\n\n{role_block}"
+    # ④ 사용자 지시(최우선, 맨 끝)
+    if feedback and feedback.strip():
+        prompt += ("\n\n[★ HIGHEST-PRIORITY USER INSTRUCTION — this overrides the scene/conti "
+                   "description above wherever they conflict. Keep reference images (faces/costumes/"
+                   f"places) unchanged. 사용자 지시: '{feedback.strip()}']")
     return _with_retry(oi.generate, prompt, aspect_ratio="9:16", refs=refs)
 
 

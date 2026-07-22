@@ -732,9 +732,22 @@ def _shot_ref_details(work: str | None, shot: dict) -> list[tuple[str, str, str]
     return out
 
 
-def shot_ref_entries(work: str | None, shot: dict) -> list[tuple[str, str]]:
-    """(role, url) 순서쌍 — 기존 호출 호환용. role은 person/costume/place/prop."""
-    return [(role, url) for role, _name, url in _shot_ref_details(work, shot)]
+def shot_ref_entries(work: str | None, shot: dict):
+    """(role, url, gender, name) 순서쌍 — costume-first 순서 유지. gender는 role=="person"이고
+    등록 성별이 있을 때만, name은 소유(인물/의상)를 reference_priority_block이 이름으로 묶기 위한
+    display. (★2026-07-22 co-writer-bot HANDOFF_실사화스틸컷프롬프트 이식 — 성별 앵커·의상 소유.)"""
+    out, seen = [], set()
+    for m in _shot_mentions(work, shot):
+        e = resolve_element(work, m)
+        if not e or e.get("id") in seen:
+            continue
+        seen.add(e.get("id"))
+        u = _element_data_url(work, e)
+        if u:
+            etype = e.get("type") or "person"
+            gender = e.get("gender") if etype == "person" else None
+            out.append((etype, u, gender, _nfc(e.get("display", "")) or m))
+    return out
 
 
 def shot_refs_with_instructions(work: str | None, shot: dict) -> tuple[str, list[str]]:
@@ -807,9 +820,29 @@ def reference_priority_block(entries: list[tuple[str, str]]) -> str:
         return ""
     lines = ["REFERENCE PRIORITY — each reference image below has ONE role only; "
              "ignore anything outside that role:"]
-    for i, (role, _url) in enumerate(entries, 1):
+    persons, costumes = [], []
+    for i, entry in enumerate(entries, 1):
+        role, gender = entry[0], (entry[2] if len(entry) > 2 else None)
+        name = entry[3] if len(entry) > 3 else None
         instr = _ROLE_INSTRUCTIONS.get(role, _ROLE_INSTRUCTIONS["prop"])
-        lines.append(f"Reference image {i}: {instr}")
+        if role == "person" and gender in ("male", "female"):
+            instr += f" This character is {gender} — keep the generated character clearly {gender}."
+        owner = f" (belongs to '{name}')" if name and role in ("person", "costume") else ""
+        lines.append(f"Reference image {i}: {instr}{owner}")
+        if role == "person" and name:
+            persons.append(name)
+        if role == "costume" and name:
+            costumes.append(name)
+    # ★2026-07-22 의상 오염 방지 — 인물/의상 참조가 여럿이면 각 인물이 '자기 의상만' 입도록 강하게
+    # 묶고 서로 못 바꾸게(빼는 게 아니라 묶어서). OTS 전경 어깨에도 타 인물 옷 금지.
+    if len(persons) >= 2 or len(costumes) >= 2:
+        lines.append(
+            "STRICT WARDROBE SEPARATION: each character wears ONLY their own outfit reference. "
+            "Do NOT swap, merge, duplicate, blend, or transfer clothing between characters. "
+            "An outfit from one character's costume reference must NOT appear on any other character "
+            "— not even partially, and not on a shoulder/arm shown in the foreground of an "
+            "over-the-shoulder framing. Bind each person's identity and outfit strictly to that one "
+            "person by their screen position described in the scene text.")
     return "\n".join(lines)
 
 
