@@ -721,6 +721,7 @@ function renderEpisodeDetail() {
 
 function openEpisodeDetail(num) {
   currentEpisodeNum = num;
+  stillsPageIndex = 0; // 다른 화 열 때 스틸 페이지 처음으로
   saveLastOpen(studioProjectId, num);
   // 편집 모드 초기화(다른 화 열 때 이전 편집 상태가 남지 않게)
   exitSubtitleEdit();
@@ -862,31 +863,87 @@ function representativePreviewItems(items) {
   return selected;
 }
 
+// 스틸 페이지네이션 상태 — 한 번에 한 장씩 보여주고 ◀ 이전 / 다음 ▶ 로 넘긴다(가로 스크롤 대신).
+let stillsCuts = [];
+let stillsPageIndex = 0;
+// 영상화 진행 중인 컷들("scene-cut") — 페이지를 넘겨 카드가 다시 그려져도 "영상화 중" 상태를 유지.
+const videoizingCuts = new Set();
+const cutKey = (scene, cut) => `${scene}-${cut}`;
+
+// 그 컷의 저장된 영상 URL(scene_stills[].video_path가 있으면 안정 엔드포인트로 서빙). 캐시 무력화용 t.
+function cutVideoUrl(scene, cut) {
+  return `${getApiBase()}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/cuts/${scene}/${cut}/video?t=${Date.now()}`;
+}
+
+function _stillCardEl(c) {
+  const div = document.createElement("div");
+  div.className = "still-card";
+  div.dataset.scene = c.scene_num;
+  div.dataset.cut = c.cut_num;
+  const busy = videoizingCuts.has(cutKey(c.scene_num, c.cut_num));
+  const hasVideo = !!c.video_path;
+  const media = hasVideo
+    ? `<video controls playsinline src="${cutVideoUrl(c.scene_num, c.cut_num)}"></video>`
+    : (c.image ? `<img src="${c.image}" alt="씬${c.scene_num} 컷${c.cut_num}">` : "");
+  const vLabel = busy ? "영상화 중…" : (hasVideo ? "🎬 다시 영상화" : "🎬 영상화");
+  div.innerHTML = `
+    <div class="still-media">${media}</div>
+    <div class="still-title">씬${c.scene_num} · 컷${c.cut_num}</div>
+    <div class="still-caption">${c.caption || ""}</div>
+    <div class="still-cut-actions">
+      <button type="button" class="text-btn cut-regen-btn">🔁 재생성</button>
+      <button type="button" class="text-btn cut-videoize-btn"${busy ? " disabled" : ""}>${vLabel}</button>
+      <button type="button" class="text-btn cut-delete-btn">🗑️ 삭제</button>
+    </div>
+    <div class="cut-note hidden">
+      <textarea class="cut-note-textarea gen-note-textarea" rows="2" placeholder="영상에 반영할 의견(선택) — 예: 카메라 더 천천히, 표정 강조"></textarea>
+      <div class="gen-note-actions">
+        <button type="button" class="text-btn cut-note-cancel-btn">취소</button>
+        <button type="button" class="text-btn cut-note-submit-btn">🎬 영상 생성</button>
+      </div>
+    </div>`;
+  return div;
+}
+
+// stillsCuts[stillsPageIndex] 한 장 + 페이지네이션 바를 그린다. 인덱스는 범위를 벗어나면 보정.
+function renderStillsPage() {
+  const list = $("stillsList");
+  list.innerHTML = "";
+  if (!stillsCuts.length) return;
+  stillsPageIndex = Math.max(0, Math.min(stillsPageIndex, stillsCuts.length - 1));
+  list.appendChild(_stillCardEl(stillsCuts[stillsPageIndex]));
+  const pager = document.createElement("div");
+  pager.className = "stills-pager";
+  pager.innerHTML = `
+    <button type="button" class="text-btn stills-prev-btn"${stillsPageIndex === 0 ? " disabled" : ""}>◀ 이전</button>
+    <span class="stills-counter">${stillsPageIndex + 1} / ${stillsCuts.length}</span>
+    <button type="button" class="text-btn stills-next-btn"${stillsPageIndex === stillsCuts.length - 1 ? " disabled" : ""}>다음 ▶</button>`;
+  list.appendChild(pager);
+}
+
 function renderStillsList(items, total) {
   const list = $("stillsList");
   list.innerHTML = "";
-  const cuts = representativePreviewItems(items).sort((a, b) =>
+  // v3.1 스틸은 클립마다 한 장씩(각자 clip_id 보유) — 전부 보여준다. 구 파이프라인만 씬당 대표 1장.
+  const isV3 = (items || []).some((it) => it.clip_id != null);
+  stillsCuts = (isV3 ? [...(items || [])] : representativePreviewItems(items)).sort((a, b) =>
     (a.scene_num - b.scene_num) || ((a.cut_num || 0) - (b.cut_num || 0)));
-  if (!cuts.length) {
-    list.innerHTML = `<div class="roster-empty">${total ? "생성 중..." : "생성된 장면이 없어요."}</div>`;
+  if (!stillsCuts.length) {
+    if (total) {
+      list.innerHTML = `<div class="roster-empty">생성 중...</div>`;
+    } else {
+      // 스틸컷을 전부 삭제했거나 아직 아무것도 안 만든 상태 — 씬1부터 다시 만드는 카드형 버튼
+      // (스틸컷 이미지와 같은 크기). 삭제로 진입점이 사라지는 문제를 여기서 되살린다.
+      const mk = document.createElement("button");
+      mk.type = "button";
+      mk.className = "still-card make-scene-card";
+      mk.innerHTML = `<div class="still-media make-scene-plus">＋</div>
+        <div class="still-title">씬1부터 스틸컷 만들기</div>`;
+      list.appendChild(mk);
+    }
     return;
   }
-  for (const c of cuts) {
-    const div = document.createElement("div");
-    div.className = "still-card";
-    div.dataset.scene = c.scene_num;
-    div.dataset.cut = c.cut_num;
-    div.innerHTML = `
-      <div class="still-media">${c.image ? `<img src="${c.image}" alt="씬${c.scene_num} 컷${c.cut_num}">` : ""}</div>
-      <div class="still-title">씬${c.scene_num} · 컷${c.cut_num}</div>
-      <div class="still-caption">${c.caption || ""}</div>
-      <div class="still-cut-actions">
-        <button type="button" class="text-btn cut-regen-btn">🔁 재생성</button>
-        <button type="button" class="text-btn cut-videoize-btn">🎬 영상화</button>
-        <button type="button" class="text-btn cut-delete-btn">🗑️ 삭제</button>
-      </div>`;
-    list.appendChild(div);
-  }
+  renderStillsPage();
 }
 
 function renderStills() {
@@ -905,37 +962,31 @@ function renderStills() {
 
 $("stillsBackBtn").addEventListener("click", () => showView("episodeDetail"));
 
-// 컷 카드 안의 미디어 영역을 영상 재생 중(폴링) 상태로 표시.
-function pollCutVideoJob(jobId, cardEl) {
+// 컷 영상화 job 폴링 — 카드 참조 대신 (scene,cut)로 추적한다. 완료/실패 시 videoizingCuts에서
+// 빼고 화 데이터를 다시 불러 페이지를 다시 그린다 → 영상이 그 컷에 저장돼 페이지를 넘겨도 유지된다.
+function pollCutVideoJob(jobId, sceneNum, cutNum) {
   const base = getApiBase();
-  const media = cardEl.querySelector(".still-media");
-  const videoizeBtn = cardEl.querySelector(".cut-videoize-btn");
+  const finish = async (msg) => {
+    videoizingCuts.delete(cutKey(sceneNum, cutNum));
+    try { await loadStudio(studioProjectId); } catch (e) { /* 무시 */ }
+    renderStillsPage();
+    if (msg) alert(msg);
+  };
   const check = async () => {
     try {
       const res = await fetch(`${base}/api/jobs/${jobId}`);
       if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
       const job = await res.json();
-      if (job.status === "done") {
-        media.innerHTML = `<video controls playsinline src="${base}${job.video_url}"></video>`;
-        videoizeBtn.textContent = "🎬 다시 영상화";
-        videoizeBtn.disabled = false;
-        return;
-      }
+      if (job.status === "done") { await finish(null); return; }
       if (job.status === "error") {
         const rawErr = job.error || "";
-        const errMsg = rawErr.includes("InputImageSensitiveContentDetected")
-          ? "안전 필터에 걸렸어요. 다시 시도해보세요."
-          : rawErr || "영상화 실패";
-        videoizeBtn.textContent = "🎬 영상화";
-        videoizeBtn.disabled = false;
-        alert(`영상화 실패: ${errMsg}`);
+        await finish("영상화 실패: " + (rawErr.includes("InputImageSensitiveContentDetected")
+          ? "안전 필터에 걸렸어요. 다시 시도해보세요." : (rawErr || "영상화 실패")));
         return;
       }
       setTimeout(check, 3000);
     } catch (e) {
-      videoizeBtn.textContent = "🎬 영상화";
-      videoizeBtn.disabled = false;
-      alert(`연결 실패: ${e.message}`);
+      await finish(`연결 실패: ${e.message}`);
     }
   };
   setTimeout(check, 3000);
@@ -943,11 +994,37 @@ function pollCutVideoJob(jobId, cardEl) {
 
 // 컷 카드의 재생성/영상화 버튼 — 이벤트 위임(카드는 매번 다시 그려지므로).
 $("stillsList").addEventListener("click", async (e) => {
+  // 페이지네이션(◀ 이전 / 다음 ▶) — 스틸 카드보다 먼저 처리(이 버튼들은 .still-card 밖에 있음).
+  if (e.target.closest(".stills-prev-btn")) {
+    if (stillsPageIndex > 0) { stillsPageIndex--; renderStillsPage(); }
+    return;
+  }
+  if (e.target.closest(".stills-next-btn")) {
+    if (stillsPageIndex < stillsCuts.length - 1) { stillsPageIndex++; renderStillsPage(); }
+    return;
+  }
+
   const card = e.target.closest(".still-card");
   if (!card || !studioProjectId || !currentEpisodeNum) return;
   const sceneNum = card.dataset.scene;
   const cutNum = card.dataset.cut;
   const base = getApiBase();
+
+  // 빈 상태의 "씬1부터 스틸컷 만들기" 카드 — scene_stills가 비어 있으므로 씬1부터 새로 만든다.
+  // v3.1 미리보기 중이면(v3Mode) v3 엔드포인트로, 그 상태가 새로고침 등으로 리셋됐어도 이 화가
+  // v3로 만들어졌으면(v3_scenes 존재) v3 경로로 라우팅한다.
+  if (card.classList.contains("make-scene-card")) {
+    const ep = currentEpisode();
+    const isV3 = v3Mode || !!(ep && ep.v3_scenes && ep.v3_scenes.length);
+    const endpoint = isV3 ? "v3/preview-scene" : "preview-stills";
+    _setV3Buttons(isV3);
+    try {
+      await startJob(endpoint, "stills", "씬1 준비 중", { scene_num: 1 });
+    } catch (err) {
+      alert(`씬 생성 실패: ${err.message}`);
+    }
+    return;
+  }
 
   if (e.target.closest(".cut-regen-btn")) {
     const btn = e.target.closest(".cut-regen-btn");
@@ -975,24 +1052,41 @@ $("stillsList").addEventListener("click", async (e) => {
     return;
   }
 
+  // 🎬 영상화(또는 다시 영상화) — 바로 만들지 않고 AI 생성과 같은 툴팁으로 의견을 먼저 묻는다.
   if (e.target.closest(".cut-videoize-btn")) {
-    const btn = e.target.closest(".cut-videoize-btn");
-    btn.disabled = true;
-    btn.textContent = "영상화 중…";
+    const box = card.querySelector(".cut-note");
+    if (box) {
+      box.classList.remove("hidden");
+      const ta = box.querySelector(".cut-note-textarea");
+      if (ta) ta.focus();
+    }
+    return;
+  }
+  if (e.target.closest(".cut-note-cancel-btn")) {
+    const box = card.querySelector(".cut-note");
+    if (box) { box.querySelector(".cut-note-textarea").value = ""; box.classList.add("hidden"); }
+    return;
+  }
+  if (e.target.closest(".cut-note-submit-btn")) {
+    const box = card.querySelector(".cut-note");
+    const note = box ? box.querySelector(".cut-note-textarea").value.trim() : "";
+    videoizingCuts.add(cutKey(sceneNum, cutNum));
+    renderStillsPage(); // "영상화 중…" 상태로 갱신(페이지를 넘겨도 유지)
     try {
+      const q = note ? `?note=${encodeURIComponent(note)}` : "";
       const res = await fetch(
-        `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/cuts/${sceneNum}/${cutNum}/videoize`,
+        `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/cuts/${sceneNum}/${cutNum}/videoize${q}`,
         { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
       }
       const { job_id } = await res.json();
-      pollCutVideoJob(job_id, card);
+      pollCutVideoJob(job_id, sceneNum, cutNum);
     } catch (err) {
+      videoizingCuts.delete(cutKey(sceneNum, cutNum));
+      renderStillsPage();
       alert(`영상화 실패: ${err.message}`);
-      btn.disabled = false;
-      btn.textContent = "🎬 영상화";
     }
     return;
   }
@@ -1011,6 +1105,7 @@ $("stillsList").addEventListener("click", async (e) => {
       }
       card.remove();
       await loadStudio(studioProjectId); // scene_stills/v3_scenes 최신 상태로 갱신(다음 씬 판단용)
+      renderStills(); // 전부 지웠으면 "씬1부터 만들기" 카드 노출 + 다음 씬 버튼 갱신
     } catch (err) {
       alert(`삭제 실패: ${err.message}`);
       btn.disabled = false;
