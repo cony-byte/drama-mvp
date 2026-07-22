@@ -594,34 +594,20 @@ def build_scene_blocks(scene_skeleton: str, script: str,
                        work: str | None = None,
                        max_attempts: int = 3,
                        synopsis: str = "", summary: str = "") -> tuple[dict | None, str, list[str]]:
-    """씬 상세 블록을 생성 + v3_schema로 파싱·전체 검증(validate_scene: 블록 합 일치까지)까지 수행.
-    검증 실패 시 오류를 피드백으로 붙여 max_attempts까지 재생성(문서 5단계 '자동 검증/부분 재생성',
-    셀프체크 규칙 21 '어기면 다시 써서 통과'). 반환: (scene_dict, conti_text, errors).
-    errors가 비면 상세 콘티가 확정된 것이므로 scene['state']를 references_ready로 전진한다 —
-    다음 단계(6·7)가 이 씬에 필요한 레퍼런스·스틸을 만들며 stills_ready 이후로 더 전진시킨다."""
-    conti_text = ""
-    scene: dict | None = None
-    errors: list[str] = ["(미생성)"]
-    feedback = ""
-    for _ in range(max_attempts):
-        conti_text = generate_scene_blocks(
-            scene_skeleton, script, prior_handoff=prior_handoff,
-            characters=characters, work=work, error_feedback=feedback,
-            synopsis=synopsis, summary=summary)
-        parsed = parsing.split_scenes(conti_text)
-        if not parsed:
-            errors = ["씬 헤더(■ 씬N …)를 찾지 못했어요 — 출력이 v3.1 씬 형식이 아니에요."]
-            feedback = "\n".join(errors)
-            continue
-        _, hdr, body = parsed[0]
-        scene = v3_schema.parse_scene(hdr, body)
-        scene["state"] = "validating"
-        errors = v3_schema.validate_scene(scene)
-        if not errors:
-            scene["state"] = v3_schema.next_state(scene["state"])  # validating → references_ready
-            break
-        feedback = "\n".join(errors)
-    return scene, conti_text, errors
+    """씬 상세 블록을 생성하고 파싱만 한다. 반환: (scene_dict, conti_text, errors).
+    ★2026-07-22(사용자 지시): v3.1 규칙 검증(validate_scene)·검증 실패 재생성을 제거 — 생성 1회로
+    확정한다. 규칙 위반(블록 초 합 불일치, 구도 헤더 형식 등)이 있어도 반려/재시도하지 않고 그대로
+    진행한다(검증 재시도로 인한 지연 제거). 씬 헤더 파싱 자체가 실패한 경우에만 하드 에러."""
+    conti_text = generate_scene_blocks(
+        scene_skeleton, script, prior_handoff=prior_handoff,
+        characters=characters, work=work, synopsis=synopsis, summary=summary)
+    parsed = parsing.split_scenes(conti_text)
+    if not parsed:
+        return None, conti_text, ["씬 헤더(■ 씬N …)를 찾지 못했어요 — 출력이 v3.1 씬 형식이 아니에요."]
+    _, hdr, body = parsed[0]
+    scene = v3_schema.parse_scene(hdr, body)
+    scene["state"] = v3_schema.next_state("validating")  # 검증 없이 references_ready로 전진
+    return scene, conti_text, []
 
 
 # ── v3.1 파이프라인 6단계: 씬별 지연 레퍼런스 생성 ───────────────────────────
