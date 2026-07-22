@@ -1785,6 +1785,13 @@ _VIDEO_REF_LOCK = (
     "character's face, hair color/style, clothing, or background/setting shown in that reference "
     "image. Only animate the motion described below; every visual element not explicitly described "
     "as changing must stay identical to the reference image throughout the video. ")
+# ★2026-07-22(HANDOFF_영상화_인물일관성): seedance가 텍스트에 끌려 스틸에 없는 새 인물을 만들거나
+# 얼굴을 바꾸는 드리프트 방지 — 참조 첫 프레임의 인원·정체성을 그대로 고정하는 강한 금지문.
+_VIDEO_IDENTITY_LOCK = (
+    "Do NOT introduce, add, or invent any new person or face that is not present in the reference "
+    "first frame. The people in this video are EXACTLY those in the reference image — the same "
+    "number of people and the same identity for each. Do not merge, swap, or replace faces, and do "
+    "not add any background people who are not in the reference image. ")
 _VIDEO_CAMERA_LOCK = (
     "Keep the camera static/locked in place by default — do not push in, zoom, dolly, or pan "
     "unless the shot description below explicitly calls for camera movement. Maintain the exact "
@@ -1796,8 +1803,9 @@ _VIDEO_STYLE_LOCK = (
 
 
 def _video_lock_prefix() -> str:
-    """모든 영상 모션 프롬프트 앞에 붙는 잠금 블록(가상인물→ref→카메라→화풍 순)."""
-    return _VIDEO_FICTION_LOCK + _VIDEO_REF_LOCK + _VIDEO_CAMERA_LOCK + _VIDEO_STYLE_LOCK
+    """모든 영상 모션 프롬프트 앞에 붙는 잠금 블록(가상인물→ref→정체성→카메라→화풍 순)."""
+    return (_VIDEO_FICTION_LOCK + _VIDEO_REF_LOCK + _VIDEO_IDENTITY_LOCK
+            + _VIDEO_CAMERA_LOCK + _VIDEO_STYLE_LOCK)
 
 
 # ★2026-07-22: 대사 없는 컷은 generate_audio=False — 자동 생성 음성이 'real person audio'
@@ -1839,12 +1847,16 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
     # 대사 없는 컷은 오디오 생성 끔(real-person audio 안전필터 회피). want_audio 미지정이면 모션
     # 프롬프트로 판정(구 shot 경로: caption=컷 내용). v3 클립은 호출부가 클립 기준으로 판정해 넘긴다
     # (clip_motion_prompt 헤더의 '대사' 지시어 오탐 방지). 대사 컷만 config 토글을 최종 적용.
-    _wa = want_audio if want_audio is not None else _has_dialogue(motion_prompt)
-    _wa = _wa and sb_config.OPENROUTER_VIDEO_GENERATE_AUDIO
+    _has_dlg = want_audio if want_audio is not None else _has_dialogue(motion_prompt)
+    _wa = _has_dlg and sb_config.OPENROUTER_VIDEO_GENERATE_AUDIO
+    # 대사 없는 컷은 입을 다물게(발화 입모양·립싱크 금지) — 없던 대사가 생기는 드리프트 방지.
+    dialogue_lock = ("" if _has_dlg else
+                     "No one speaks in this cut — keep mouths closed and do NOT animate talking or "
+                     "lip-sync mouth shapes. ")
 
     def _gen_once(image_bytes, prompt):
         # _with_retry 재시도 없이 1회만 — 안전필터는 재시도해도 같은 결과라 낭비
-        return hf_video.generate(image_bytes, prompt,
+        return hf_video.generate(image_bytes, dialogue_lock + prompt,
                                  aspect_ratio="9:16", generate_audio=_wa)
 
     def _is_filter(e):
