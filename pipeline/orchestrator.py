@@ -742,6 +742,22 @@ def _block_participants(scene: dict, block: dict | None) -> list[str] | None:
     return None
 
 
+def _block_focus_char(block: dict | None, cast_names: list[str]) -> str | None:
+    """블록 대상이 '{이름} 단독' 또는 '{이름} 위주(...)'면 그 1인을 focus_char로 반환 — 얼굴 참조를
+    그 인물로 좁혀(다른 인물 참조 drop) 정체성이 blend/drift되는 걸 막는다. '2인' 등 특정 1인이
+    주체가 아닌 컷은 None(둘 다 유지). (★2026-07-22 실측: 강태민 단독/위주 컷인데 씬 선언 라인의
+    상대 이름이 텍스트 스캔돼 상대 얼굴 참조까지 붙어 태민 얼굴이 다르게 나옴.)"""
+    target = v3_schema.parse_composition_header((block or {}).get("header") or "").get("target") or ""
+    m = re.match(r"(.+?)\s*(?:위주|단독)", target)
+    if not m:
+        return None
+    key = m.group(1).strip()
+    for n in cast_names:  # 풀네임/짧은 이름 모두 매칭
+        if n and (n == key or _name_in_target(n, key) or key in n):
+            return n
+    return key or None
+
+
 def _clip_pseudo_shot(scene: dict, clip: dict, block: dict, work: str | None = None,
                       characters: list[dict] | None = None) -> dict:
     """클립 대표 블록을 기존 이미지 생성기(generate_image_for_shot)가 이해하는 shot 유사 dict로
@@ -777,9 +793,12 @@ def _clip_pseudo_shot(scene: dict, clip: dict, block: dict, work: str | None = N
             costumes[name] = (el.get("display") if el and el.get("display") else costume)
         if appearance_by_name.get(name):
             appearances[name] = appearance_by_name[name]
+    char_names = [c["name"] for c in cast if c.get("name")]
     return {
         "n": _clip_ordinal(clip.get("clip_id")),
-        "characters": [c["name"] for c in cast if c.get("name")],
+        "characters": char_names,
+        # 위주/OTS 컷이면 그 1인만 얼굴 참조로(다른 인물 참조 drop) — 정체성 흔들림 방지
+        "focus_char": _block_focus_char(block, char_names),
         "costumes": costumes,
         "appearances": appearances,
         "places": [scene["location_tag"]] if scene.get("location_tag") else [],
@@ -808,13 +827,14 @@ def generate_clip_still(scene: dict, clip: dict, work: str | None = None,
 
 
 def generate_video_for_clip(work: str, scene_num: int, clip_id: str, png: bytes,
-                            motion_prompt: str, episode: int = 1) -> str:
+                            motion_prompt: str, episode: int = 1,
+                            want_audio: bool | None = None) -> str:
     """클립 대표 스틸 1장 + 클립 멀티샷 모션 프롬프트 → 클립 영상 1개(로컬 mp4 경로).
     저장은 clip{clip_id} 단위(generate_video_for_cut의 clip_id 경로 재사용 — 안전필터 격자
     회피 로직도 그대로 탄다)."""
     return generate_video_for_cut(work, scene_num, cut_num=None, png=png,
                                   motion_prompt=motion_prompt, episode=episode,
-                                  clip_id=clip_id)
+                                  clip_id=clip_id, want_audio=want_audio)
 
 
 def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
@@ -843,7 +863,8 @@ def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
             pass  # 스틸 파일 저장 실패해도 메모리의 png로 영상화는 이어감
     try:
         motion = sb_prompts.clip_motion_prompt(scene, clip)
-        path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=episode)
+        path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=episode,
+                                       want_audio=_clip_has_dialogue(clip))
     except Exception as e:
         return {"clip_id": clip_id, "status": "still_only", "still_png": png, "error": str(e)}
     return {"clip_id": clip_id, "status": "ok", "still_png": png, "video_path": path}
@@ -1712,9 +1733,10 @@ def _detect_face_boxes(png: bytes, W: int, H: int) -> list[tuple[int, int, int, 
                 return boxes
     except Exception:
         pass
-    # 폴백: 상단 중앙 박스 하나
-    w, h = int(W * 0.65), int(H * 0.36)
-    return [((W - w) // 2, int(H * 0.10), w, h)]
+    # 폴백: opencv/ultralytics 미설치(배포=homebrew python 등) 시 PIL만으로 상단 중앙을 넉넉히
+    # 덮는다 — 감지 아닌 휴리스틱이지만 no-op보다 훨씬 안전(co-writer-bot _heuristic_boxes_pil 이식).
+    w, h = int(W * 0.72), int(H * 0.42)
+    return [((W - w) // 2, int(H * 0.06), w, h)]
 
 
 def _facegrid_overlay(png: bytes) -> bytes:
@@ -1797,9 +1819,32 @@ def _video_lock_prefix() -> str:
     return _VIDEO_FICTION_LOCK + _VIDEO_REF_LOCK + _VIDEO_CAMERA_LOCK + _VIDEO_STYLE_LOCK
 
 
+# ★2026-07-22: 대사 없는 컷은 generate_audio=False — 자동 생성 음성이 'real person audio'
+# 안전필터에 걸리는 걸 회피(co-writer-bot HANDOFF_안전필터우회 이식). 대사 판정 정규식.
+_DIALOGUE_QUOTE_RE = re.compile(r"'[^']{2,}'|\"[^\"]{2,}\"|[‘“][^’”]{2,}[’”]|[「『][^」』]{2,}[」』]")
+_DIALOGUE_MARKER_RE = re.compile(
+    r"나레이션|내레이션|보이스\s*오버|방백|독백|읊조|중얼|외치|말한다|말하며|대사|"
+    r"\bNa\b|\(Na\)|V\.?O\.?|voice[\s-]*over|narrat", re.I)
+
+
+def _has_dialogue(text: str) -> bool:
+    """텍스트에 대사/나레이션이 있는지(따옴표 발화 또는 나레이션·대사 마커)."""
+    t = text or ""
+    return bool(_DIALOGUE_QUOTE_RE.search(t) or _DIALOGUE_MARKER_RE.search(t))
+
+
+def _clip_has_dialogue(clip: dict) -> bool:
+    """클립 '자체'(블록 서술·라벨)에 대사가 있는지 — clip_motion_prompt 헤더의 '대사'라는 지시어에
+    오탐되지 않게 모션 프롬프트가 아니라 클립 내용만 본다."""
+    texts = [clip.get("label") or ""]
+    for b in clip.get("blocks") or []:
+        texts.append(b.get("text") or "")
+    return _has_dialogue(" ".join(texts))
+
+
 def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
                            motion_prompt: str, episode: int = 1, shot: dict | None = None,
-                           clip_id: str | None = None) -> str:
+                           clip_id: str | None = None, want_audio: bool | None = None) -> str:
     """스틸컷 1장을 영상화해 로컬 mp4 절대경로를 반환. project_setup.ensure_project(work)를
     먼저 호출해둬야 vp_store가 프로젝트 디렉토리를 찾을 수 있다.
     clip_id가 주어지면 저장을 컷(cut_num)이 아니라 클립(clip{clip_id}) 단위로 한다 — v3.1
@@ -1810,10 +1855,16 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
     unit = f"클립{clip_id}" if clip_id is not None else f"컷{cut_num}"
     anchor_name = f"clip{clip_id}.png" if clip_id is not None else f"cut{cut_num}.png"
 
+    # 대사 없는 컷은 오디오 생성 끔(real-person audio 안전필터 회피). want_audio 미지정이면 모션
+    # 프롬프트로 판정(구 shot 경로: caption=컷 내용). v3 클립은 호출부가 클립 기준으로 판정해 넘긴다
+    # (clip_motion_prompt 헤더의 '대사' 지시어 오탐 방지). 대사 컷만 config 토글을 최종 적용.
+    _wa = want_audio if want_audio is not None else _has_dialogue(motion_prompt)
+    _wa = _wa and sb_config.OPENROUTER_VIDEO_GENERATE_AUDIO
+
     def _gen_once(image_bytes, prompt):
         # _with_retry 재시도 없이 1회만 — 안전필터는 재시도해도 같은 결과라 낭비
         return hf_video.generate(image_bytes, prompt,
-                                 aspect_ratio="9:16", generate_audio=True)
+                                 aspect_ratio="9:16", generate_audio=_wa)
 
     def _is_filter(e):
         return "InputImageSensitiveContentDetected" in str(e)
@@ -2267,7 +2318,8 @@ def videoize_cut_job(project: dict, episode: dict, job_id: str, save_fn=None, *,
             motion = sb_prompts.clip_motion_prompt(scene, clip)
             if note:
                 motion = f"{motion}\n\n[사용자 요청 반영 — 아래 지시를 최우선으로]: {note}"
-            path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=num)
+            path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=num,
+                                           want_audio=_clip_has_dialogue(clip))
         else:  # 구 shot 파이프라인 컷
             shots_by_scene = _norm_shots(episode.get("shots_by_scene") or {})
             shot = next((s for s in (shots_by_scene.get(scene_num) or []) if s.get("n") == cut_num), None)
