@@ -256,11 +256,20 @@ async function pollJob(jobId) {
     if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
     const job = await res.json();
 
-    // 씬 개수(total)를 알게 되는 즉시 미리보기 화면으로 전환하고, 이후 폴링마다 완성된
-    // 스틸부터 하나씩 채운다 — 전부 끝날 때까지 기다리지 않는다.
-    if (currentJobMode === "stills" && job.total) {
+    // 스틸 모드: 폴링마다 완성된 스틸부터 하나씩 노출(전부 끝날 때까지 안 기다림). 아직 스틸이
+    // 없으면(참조 생성·상세 콘티 분할 등 파이프라인 진행 중) 현재 단계를 "생성 중…"으로 보여준다.
+    if (currentJobMode === "stills") {
       showView("stills");
-      renderStillsList(job.stills || [], job.total);
+      const stills = job.stills || [];
+      if (stills.length) {
+        renderStillsList(stills, job.total || stills.length);
+        if (job.status !== "done") {  // 생성 중엔 방금 나온 최신 컷을 보여준다(하나씩 노출)
+          stillsPageIndex = stillsCuts.length - 1;
+          renderStillsPage();
+        }
+      } else if (job.status !== "done") {
+        renderStillsLoading(job.stage || "생성 중…");
+      }
     } else if (job.status === "running") {
       updateStageList(job.stage || "진행 중");
     }
@@ -749,8 +758,16 @@ function startJob(endpoint, mode, prepMsg, query) {
       const { job_id } = await res.json();
       currentJobId = job_id;
       currentJobMode = mode;
-      showView("progress");
-      updateStageList(prepMsg);
+      // ★2026-07-22: 스틸 모드는 별도 진행 화면 없이 곧바로 스틸 뷰(생성 중…)로 — 백엔드
+      // 파이프라인(참조 생성·붙이기·상세 콘티 분할)이 도는 동안 폴링이 완성된 컷부터 노출한다.
+      if (mode === "stills") {
+        stillsPageIndex = 0;
+        showView("stills");
+        renderStillsLoading(prepMsg);
+      } else {
+        showView("progress");
+        updateStageList(prepMsg);
+      }
       stopPolling();
       pollTimer = setInterval(() => pollJob(job_id), 3000);
       pollJob(job_id);
@@ -905,6 +922,11 @@ function _stillCardEl(c) {
       </div>
     </div>`;
   return div;
+}
+
+// 스틸이 아직 하나도 안 나온 로딩 상태 — 백엔드 파이프라인 현재 단계(stage)를 "생성 중…"으로.
+function renderStillsLoading(stage) {
+  $("stillsList").innerHTML = `<div class="roster-empty">🎬 ${escapeHtml(stage || "생성 중…")}</div>`;
 }
 
 // stillsCuts[stillsPageIndex] 한 장 + 페이지네이션 바를 그린다. 인덱스는 범위를 벗어나면 보정.

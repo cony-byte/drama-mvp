@@ -1088,6 +1088,9 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
                 "caption": clip.get("label", ""), "image": oi.png_data_url(png),
                 "video_path": None, "representative": True,
             })
+            # ★2026-07-22: 생성되는 스틸을 하나씩 노출 — 이전 씬 스틸 + 이번 씬 진행분을 job.stills에
+            # 즉시 반영해 프런트 폴링이 완성된 컷부터 바로 보여주게 한다(전부 끝날 때까지 안 기다림).
+            jobs.update(job_id, stills=_v3_all_stills(v3map) + stills)
 
         v3map[scene_num] = {
             "scene_num": scene_num, "state": "stills_ready", "conti_text": conti_text,
