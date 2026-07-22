@@ -883,6 +883,7 @@ function renderStillsList(items, total) {
       <div class="still-cut-actions">
         <button type="button" class="text-btn cut-regen-btn">🔁 재생성</button>
         <button type="button" class="text-btn cut-videoize-btn">🎬 영상화</button>
+        <button type="button" class="text-btn cut-delete-btn">🗑️ 삭제</button>
       </div>`;
     list.appendChild(div);
   }
@@ -992,6 +993,27 @@ $("stillsList").addEventListener("click", async (e) => {
       alert(`영상화 실패: ${err.message}`);
       btn.disabled = false;
       btn.textContent = "🎬 영상화";
+    }
+    return;
+  }
+
+  if (e.target.closest(".cut-delete-btn")) {
+    if (!confirm(`씬${sceneNum} · 컷${cutNum}을 삭제할까요? 다시 만들려면 "씬 만들기"를 눌러야 해요.`)) return;
+    const btn = e.target.closest(".cut-delete-btn");
+    btn.disabled = true;
+    try {
+      const res = await fetch(
+        `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/cuts/${sceneNum}/${cutNum}`,
+        { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
+      }
+      card.remove();
+      await loadStudio(studioProjectId); // scene_stills/v3_scenes 최신 상태로 갱신(다음 씬 판단용)
+    } catch (err) {
+      alert(`삭제 실패: ${err.message}`);
+      btn.disabled = false;
     }
     return;
   }

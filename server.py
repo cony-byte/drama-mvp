@@ -529,6 +529,38 @@ def studio_regenerate_cut(project_id: str, num: int, scene_num: int, cut_num: in
     return new_still
 
 
+@app.delete("/api/studio/{project_id}/episodes/{num}/cuts/{scene_num}/{cut_num}")
+def studio_delete_cut(project_id: str, num: int, scene_num: int, cut_num: int):
+    """미리보기의 특정 컷을 삭제(메타데이터만 — 이미 생성된 이미지/영상 파일은 지우지 않는다).
+    scene_stills에서 빼고, v3.1 모드로 만든 컷이면 v3_scenes[].stills에서도 같이 빼서 다음
+    미리보기/제작 때 삭제된 컷이 되살아나지 않게 한다. 그 씬의 컷을 전부 지우면 다음 "씬 만들기"
+    로 그 씬을 다시 만들 수 있다(scene_stills에 그 씬 항목이 없으면 미완성 씬으로 간주됨)."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+
+    def _not_target(s):
+        return not (s.get("scene_num") == scene_num and s.get("cut_num") == cut_num)
+
+    stills = [s for s in (episode.get("scene_stills") or []) if _not_target(s)]
+    fields = {"scene_stills": stills}
+
+    v3_scenes = episode.get("v3_scenes") or []
+    if v3_scenes:
+        new_v3_scenes = []
+        for s in v3_scenes:
+            if int(s.get("scene_num") or -1) == scene_num and s.get("stills"):
+                s = {**s, "stills": [st for st in s["stills"] if _not_target(st)]}
+            new_v3_scenes.append(s)
+        fields["v3_scenes"] = new_v3_scenes
+
+    studio.update_episode(project_id, num, **fields)
+    return {"ok": True}
+
+
 @app.post("/api/studio/{project_id}/episodes/{num}/cuts/{scene_num}/{cut_num}/videoize")
 def studio_videoize_cut(project_id: str, num: int, scene_num: int, cut_num: int):
     """미리보기(또는 재생성)로 만들어둔 특정 컷 스틸을 그대로 영상화 — 백그라운드 job.
