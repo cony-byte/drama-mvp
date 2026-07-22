@@ -53,8 +53,8 @@ OPENROUTER_IMAGE_MODERATION = os.environ.get("OPENROUTER_IMAGE_MODERATION", "low
 OPENROUTER_PANEL_ASPECT = os.environ.get("OPENROUTER_PANEL_ASPECT", "16:9")
 OPENROUTER_GRID_COLS = int(os.environ.get("OPENROUTER_GRID_COLS", "6"))
 OPENROUTER_IMG_WORKERS = int(os.environ.get("OPENROUTER_IMG_WORKERS", "4"))
-# 영상(seedance) 병렬 생성 수 — 이미지보다 무겁고 레이트리밋에 민감해 보수적으로 소수(기본 2).
-OPENROUTER_VIDEO_WORKERS = int(os.environ.get("OPENROUTER_VIDEO_WORKERS", "2"))
+# 영상(seedance) 병렬 생성 수 — 이미지보다 무겁고 레이트리밋에 민감해 보수적으로 소수(기본 3).
+OPENROUTER_VIDEO_WORKERS = int(os.environ.get("OPENROUTER_VIDEO_WORKERS", "3"))
 OPENROUTER_IMG_TIMEOUT = int(os.environ.get("OPENROUTER_IMG_TIMEOUT", "600"))
 
 # ── OpenRouter 영상(image-to-video, /api/v1/videos) — 2026-07-13 신규 ──
