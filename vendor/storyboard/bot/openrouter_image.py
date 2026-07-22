@@ -294,9 +294,53 @@ def character_refs(work: str | None, names: list[str]) -> list[str]:
 # 텍스트에 등록 이름이 등장하는지로 매칭하므로(아래 shot_refs 참고) 이 타입만 추가하면 된다.
 ELEMENT_TYPES = ("person", "place", "prop", "costume")
 
+# ★2026-07-22(refs 구조 재설계): 참조 이미지는 타입별 하위 폴더에 요소ID로 저장한다.
+#   refs/<작품>/_registry.json          = 요소ID↔메타(type/display/aliases) 매핑(이미지 아님)
+#   refs/<작품>/인물|의상|장소|소품/<id>.<ext> = 참조 이미지(파일명=요소ID, 표시이름과 분리)
+# 파일명을 표시이름이 아닌 요소ID로 쓰므로, 이름이 바뀌거나 중복돼도 파일 연결이 안 깨지고,
+# 폴더는 타입에서 결정돼 "인물이 의상 폴더에 잘못 들어가는" 사고가 원천 차단된다.
+_TYPE_FOLDER = {"person": "인물", "costume": "의상", "place": "장소", "prop": "소품"}
+
 
 def _elements_path(work: str):
-    return config.OPENROUTER_REFS_DIR / _canon_work(work) / "elements.json"
+    return config.OPENROUTER_REFS_DIR / _canon_work(work) / "_registry.json"
+
+
+def _element_file_path(work: str | None, e: dict):
+    """요소의 참조 이미지 경로 = refs/<작품>/<타입폴더>/<요소ID>.<ext>. id/작품 없으면 None."""
+    work_c = _canon_work(work)
+    eid = e.get("id")
+    if not (work_c and eid):
+        return None
+    folder = _TYPE_FOLDER.get(e.get("type") or "person", e.get("type") or "person")
+    ext = e.get("ext") or "png"
+    return config.OPENROUTER_REFS_DIR / work_c / folder / f"{eid}.{ext}"
+
+
+def element_has_image(work: str | None, e: dict) -> bool:
+    """요소에 실제 참조 이미지 파일이 있는지."""
+    p = _element_file_path(work, e)
+    return bool(p and p.exists())
+
+
+def save_element_image(work: str, element: dict, png: bytes, ext: str = "png") -> None:
+    """요소 참조 이미지를 refs/<작품>/<타입폴더>/<요소ID>.<ext>에 저장하고 ext를 레지스트리에 기록.
+    element은 register_element가 돌려준(=id를 가진) dict여야 한다."""
+    eid = element.get("id")
+    if not eid:
+        return
+    with _ELEMENTS_LOCK:
+        p = _element_file_path(work, {**element, "ext": ext})
+        if not p:
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(png)
+        elems = load_elements(work)
+        for e in elems:
+            if e.get("id") == eid:
+                e["ext"] = ext
+                break
+        _save_elements(work, elems)
 
 
 def load_elements(work: str | None) -> list[dict]:
@@ -346,10 +390,10 @@ def register_element(work: str, display: str, etype: str = "person",
             cur = {"id": uuid.uuid4().hex, "display": display, "aliases": [], "status": "confirmed"}
             elems.append(cur)
         cur["type"] = etype
-        if filename:
-            cur["file"] = filename
-        elif clear_file:
-            cur.pop("file", None)
+        # ★2026-07-22(refs 재설계): file 필드 폐지 — 이미지 경로는 id+type에서 계산한다
+        #   (save_element_image/_element_file_path). filename/clear_file 인자는 하위호환용으로
+        #   남겨두되 무시한다(레거시 file 값이 있으면 정리).
+        cur.pop("file", None)
         if tag_name:
             cur["tag_name"] = tag_name
         if aliases:
@@ -541,13 +585,12 @@ def resolve_element(work: str | None, mention: str) -> dict | None:
 
 
 def _element_data_url(work: str | None, e: dict) -> str | None:
-    f = e.get("file")
-    if f and work:
-        p = config.OPENROUTER_REFS_DIR / _canon_work(work) / f
-        if p.exists():
-            mt = mimetypes.guess_type(str(p))[0] or "image/png"
-            return f"data:{mt};base64," + base64.b64encode(p.read_bytes()).decode("ascii")
-    return _load_by_stem(work, _nfc(e.get("display", "")))   # file 미지정/부재 → stem으로
+    # ★2026-07-22(refs 재설계): 이미지 경로 = refs/<작품>/<타입폴더>/<요소ID>.<ext>.
+    p = _element_file_path(work, e)
+    if p and p.exists():
+        mt = mimetypes.guess_type(str(p))[0] or "image/png"
+        return f"data:{mt};base64," + base64.b64encode(p.read_bytes()).decode("ascii")
+    return None
 
 
 def png_data_url(png: bytes) -> str:

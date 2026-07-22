@@ -176,11 +176,9 @@ def _save_character_reference(work: str, character: dict) -> None:
     name = character.get("name") or "인물"
     b64 = image.split(",", 1)[1]
     png = base64.b64decode(b64)
-    filename = f"{_safe_filename(name)}.png"
-    dest_dir = oi.config.OPENROUTER_REFS_DIR / oi.canon_work(work)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    (dest_dir / filename).write_bytes(png)
-    elem = oi.register_element(work, name, etype="person", filename=filename, aliases=[name])
+    # ★2026-07-22(refs 재설계): 인물을 person으로 등록(id 획득) → refs/<작품>/인물/<id>.png 저장.
+    elem = oi.register_element(work, name, etype="person", aliases=[name])
+    oi.save_element_image(work, elem, png)
     gender_en = _GENDER_EN.get((character.get("gender") or "").strip())
     if gender_en:
         with oi._ELEMENTS_LOCK:

@@ -659,7 +659,7 @@ def ensure_scene_costumes(work: str, scene: dict, characters: list[dict] | None 
             continue  # 이름 없음 또는 이미 등록 의상 있음 → 건드리지 않음
         label = f"{name} 의상"
         existing = oi.resolve_element(work, label)
-        if existing and existing.get("file"):
+        if existing and oi.element_has_image(work, existing):
             c["costume"] = existing.get("display") or label  # 이전 씬에서 만든 의상 재사용
             reused += 1
             continue
@@ -1275,13 +1275,10 @@ def _element_ref_prompt(name: str, etype: str, mood: str = "", context: str = ""
 
 
 def _register_element_image(work: str, name: str, etype: str, png: bytes) -> None:
-    """생성한 요소 레퍼런스 PNG를 refs 디렉토리에 저장하고 요소 id로 등록(파일 연결) —
-    co-writer-bot의 _auto_register_element 저장 로직과 동일(data/refs/<work>/<name>.png)."""
-    dest_dir = oi.config.OPENROUTER_REFS_DIR / oi.canon_work(work)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{_safe_element_filename(name)}.png"
-    (dest_dir / filename).write_bytes(png)
-    oi.register_element(work, name, etype=etype, filename=filename, aliases=[name])
+    """요소를 등록(메타데이터)해 id를 얻고, 참조 PNG를 refs/<작품>/<타입폴더>/<id>.png에 저장한다
+    (★2026-07-22 refs 재설계: 파일명=요소ID, 폴더=타입에서 결정)."""
+    el = oi.register_element(work, name, etype=etype, aliases=[name])
+    oi.save_element_image(work, el, png)
 
 
 def _safe_element_filename(name: str) -> str:
@@ -1313,7 +1310,7 @@ def fix_element_references(work: str, mood: str = "", conti_full: str = "",
             etype = e.get("type")
             if etype not in ("place", "costume", "prop"):
                 continue
-            if e.get("file"):
+            if oi.element_has_image(work, e):
                 continue  # 이미 레퍼런스 이미지 있음
             name = e.get("display") or ""
             if not name:
