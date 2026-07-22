@@ -814,6 +814,13 @@ $("v3PreviewBtn").addEventListener("click", async () => {
     return;
   }
   _setV3Buttons(true);
+  // ★2026-07-22: 이미 만들어둔 스틸이 있으면 재생성하지 말고 그대로 띄운다(중복 생성·과부하 방지).
+  // 다시 만들려면 스틸 뷰에서 컷을 지우고 "씬1부터 만들기"를 쓰면 된다.
+  if ((ep.scene_stills || []).some((s) => s.image)) {
+    showView("stills");
+    renderStills();
+    return;
+  }
   try {
     await startJob("v3/preview-scene", "stills", "v3.1 미리보기 준비 중", { scene_num: 1 });
   } catch (e) {

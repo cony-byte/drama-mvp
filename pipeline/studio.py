@@ -180,6 +180,10 @@ def _save_character_reference(work: str, character: dict) -> None:
     # 그 원본에서 '얼굴 전용 레퍼런스'(정면·얼굴~어깨 크롭·중립 상의·액세서리 제거·흰 배경)를
     # 만들어 대표 <id>.png로 쓴다(같은 요소 id로 원본↔얼굴레퍼런스 매칭). 중립화 실패 시 원본 폴백.
     elem = oi.register_element(work, name, etype="person", aliases=[name])
+    # ★2026-07-22: 이미 얼굴 레퍼런스가 있으면 매번 다시 만들지 않는다(재실행마다 img2img 중립화가
+    # 반복돼 '인물 기준 이미지 준비 중'이 오래 걸리던 문제). 처음 한 번만 원본 보관 + 중립화.
+    if oi.element_has_image(work, elem):
+        return
     oi.save_element_image(work, elem, original_png, variant="원본")
     face_png = _make_face_reference(original_png, character) or original_png
     oi.save_element_image(work, elem, face_png)
