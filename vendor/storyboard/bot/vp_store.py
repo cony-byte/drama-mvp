@@ -63,9 +63,9 @@ def save_still(work: str, *, scene_num: int | None, prompt_summary: str,
     proj = oi.vp_project_dir(work)
     if not proj:
         return None
-    scene_dir = proj / "outputs" / "stills" / _episode_dir_name(episode) / _scene_dir_name(scene_num)
+    scene_dir = episode_kind_dir(work, episode, "still", scene_num)
     scene_dir.mkdir(parents=True, exist_ok=True)
-    rel = str((scene_dir.relative_to(proj)))
+    rel = str(scene_dir.relative_to(proj.parent.parent))  # <data> 기준 상대경로(visual.db 로그용)
 
     # v3.1 클립 단위 스틸: cut{n}.png 대신 clip{clip_id}.png 하나로 저장(대표/보강 스틸 앵커).
     # meta는 클립 id 키로 병합해 다른 클립 항목을 지우지 않는다(cut 저장과 같은 원칙).
@@ -113,6 +113,32 @@ def _episode_dir_name(episode: int | str | None) -> str:
     return f"{episode}화" if episode else "미분류"
 
 
+# ★2026-07-22(outputs 구조 재설계): 아웃풋을 화(에피소드)-우선 + 한글 타입 폴더로 관리한다.
+#   <data>/outputs/<작품>/<N>화/스틸컷/<N씬>/   cut{n}.png · clip{id}.png · meta.json
+#   <data>/outputs/<작품>/<N>화/영상/<N씬>/     video_s{씬}_{unit}_{uuid}.mp4
+#   <data>/outputs/<작품>/<N>화/합본/           {제목}_최종.mp4 등
+# 스틸컷·영상은 씬별 하위 폴더, 합본은 화 단위. (refs와 나란한 전용 outputs 루트)
+_KIND_FOLDER = {"still": "스틸컷", "video": "영상", "compile": "합본"}
+
+
+def out_root(work: str | None):
+    """작품 아웃풋 루트 = <data>/outputs/<작품폴더명>. 프로젝트 못 찾으면 None."""
+    proj = oi.vp_project_dir(work)
+    return (proj.parent.parent / "outputs" / proj.name) if proj else None
+
+
+def episode_kind_dir(work: str | None, episode, kind: str, scene_num: int | None = None):
+    """아웃풋 경로 = outputs/<작품>/<N>화/<종류폴더>[/<N씬>]. kind ∈ {still, video, compile}.
+    still/video는 scene_num이 주어지면 씬별 하위 폴더까지, compile은 화 단위."""
+    root = out_root(work)
+    if root is None:
+        return None
+    d = root / _episode_dir_name(episode) / _KIND_FOLDER[kind]
+    if scene_num is not None and kind in ("still", "video"):
+        d = d / _scene_dir_name(scene_num)
+    return d
+
+
 def save_video(work: str, *, scene_num: int | None, cut_num: int | None, url: str,
               episode: int | str | None = None, clip_id: str | None = None,
               prompt_summary: str = "", application: str = "", requested_by: str | None = None,
@@ -131,7 +157,7 @@ def save_video(work: str, *, scene_num: int | None, cut_num: int | None, url: st
     proj = oi.vp_project_dir(work)
     if not proj:
         return None
-    out_dir = proj / "outputs" / "videos" / _episode_dir_name(episode)
+    out_dir = episode_kind_dir(work, episode, "video", scene_num)
     out_dir.mkdir(parents=True, exist_ok=True)
     # v3.1 클립 단위 영상은 cut 대신 clip{clip_id}로 파일명을 잡는다(영상 호출 단위 = 클립).
     unit = f"clip{clip_id}" if clip_id is not None else f"cut{cut_num or 0}"
@@ -154,7 +180,7 @@ def save_video(work: str, *, scene_num: int | None, cut_num: int | None, url: st
     except Exception:
         log.exception("영상 다운로드 실패 — URL은 정상 결과물, 로컬 저장만 실패")
         return None
-    rel = f"outputs/videos/{_episode_dir_name(episode)}/{fname}"
+    rel = str(dest.relative_to(proj.parent.parent))  # <data> 기준 상대경로(visual.db 로그용)
 
     if vp_db is not None:
         try:
@@ -179,8 +205,8 @@ def find_existing_video(work: str, scene_num: int | None, cut_num: int | None,
     proj = oi.vp_project_dir(work)
     if not proj:
         return None
-    video_dir = proj / "outputs" / "videos" / _episode_dir_name(episode)
-    if not video_dir.exists():
+    video_dir = episode_kind_dir(work, episode, "video", scene_num)
+    if not video_dir or not video_dir.exists():
         return None
     unit = f"clip{clip_id}" if clip_id is not None else f"cut{cut_num or 0}"
     matches = sorted(video_dir.glob(f"video_s{scene_num or 0}_{unit}_*.mp4"),
@@ -235,8 +261,7 @@ def load_latest_cuts(work: str, scene_num: int | None,
     proj = oi.vp_project_dir(work)
     if not proj:
         return None
-    scene_dir = (proj / "outputs" / "stills" / _episode_dir_name(episode)
-                / _scene_dir_name(scene_num))
+    scene_dir = episode_kind_dir(work, episode, "still", scene_num)
     meta_path = scene_dir / "meta.json"
     if not meta_path.exists():
         return None
@@ -266,9 +291,9 @@ def _episode_output_paths(work: str, episode: int | str):
     proj = oi.vp_project_dir(work)
     if not proj:
         return None, None, None
-    video_dir = proj / "outputs" / "videos" / _episode_dir_name(episode)
-    compiled_dir = proj / "outputs" / "compiled"
-    stills_dir = proj / "outputs" / "stills" / _episode_dir_name(episode)
+    video_dir = episode_kind_dir(work, episode, "video")      # 화 단위 영상 폴더(하위에 씬별)
+    compiled_dir = episode_kind_dir(work, episode, "compile")  # 화 단위 합본 폴더
+    stills_dir = episode_kind_dir(work, episode, "still")      # 화 단위 스틸컷 폴더(하위에 씬별)
     return video_dir, compiled_dir, stills_dir
 
 
@@ -277,8 +302,8 @@ def preview_episode_outputs(work: str, episode: int | str) -> dict | None:
     video_dir, compiled_dir, stills_dir = _episode_output_paths(work, episode)
     if video_dir is None:
         return None
-    video_files = sorted(p.name for p in video_dir.glob("*.mp4")) if video_dir.exists() else []
-    compiled_files = (sorted(p.name for p in compiled_dir.glob(f"{episode}화*.mp4"))
+    video_files = sorted(p.name for p in video_dir.rglob("*.mp4")) if video_dir.exists() else []
+    compiled_files = (sorted(p.name for p in compiled_dir.glob("*.mp4"))
                       if compiled_dir.exists() else [])
     still_scenes = sorted(p.name for p in stills_dir.iterdir() if p.is_dir()) if stills_dir.exists() else []
     return {"video_dir": str(video_dir), "video_files": video_files, "compiled_files": compiled_files,
@@ -292,10 +317,10 @@ def delete_episode_outputs(work: str, episode: int | str) -> dict:
     video_dir, compiled_dir, stills_dir = _episode_output_paths(work, episode)
     deleted = {"video_files": [], "compiled_files": [], "still_scenes": []}
     if video_dir and video_dir.exists():
-        deleted["video_files"] = sorted(p.name for p in video_dir.glob("*.mp4"))
+        deleted["video_files"] = sorted(p.name for p in video_dir.rglob("*.mp4"))
         shutil.rmtree(video_dir, ignore_errors=True)
     if compiled_dir and compiled_dir.exists():
-        for p in sorted(compiled_dir.glob(f"{episode}화*.mp4")):
+        for p in sorted(compiled_dir.glob("*.mp4")):
             try:
                 p.unlink()
                 deleted["compiled_files"].append(p.name)

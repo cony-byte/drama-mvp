@@ -26,6 +26,7 @@ from pathlib import Path
 from . import config
 from . import openrouter_image as oi
 from . import openrouter_music as music
+from . import vp_store
 from . import openrouter_tts as tts
 
 log = logging.getLogger("storyboard-bot")
@@ -342,7 +343,9 @@ def compile_episode(work: str, episode_title: str, plan: list[dict],
     proj = oi.vp_project_dir(work)
     if not proj:
         raise CompileError(f"'{work}' 프로젝트 폴더를 못 찾았어요.")
-    out_dir = proj / "outputs" / "compiled"
+    # ★2026-07-22(outputs 재설계): 합본 = outputs/<작품>/<N>화/합본/. episode_title("1화")에서 화 번호 파싱.
+    _ep_m = re.match(r"\s*(\d+)", episode_title or "")
+    out_dir = vp_store.episode_kind_dir(work, int(_ep_m.group(1)) if _ep_m else None, "compile")
     out_dir.mkdir(parents=True, exist_ok=True)
     # 이전에 확정 안 하고 남겨둔 draft가 있으면 새로 만들기 전에 정리(최종본은 안 건드림).
     for old in out_dir.glob(f"{episode_title}_draft_*.mp4"):
