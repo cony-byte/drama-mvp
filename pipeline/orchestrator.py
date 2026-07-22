@@ -4,6 +4,7 @@
 import concurrent.futures
 import hashlib
 import io
+import logging
 import os
 import re
 import threading
@@ -20,6 +21,9 @@ import vendor.storyboard.bot.video_index as video_index
 import vendor.storyboard.bot.vp_store as vp_store
 
 from pipeline import jobs, parsing, project_setup, v3_schema
+
+# storyboard-bot 로거(uvicorn 출력에 propagate) — 실패를 조용히 삼키지 않고 원인을 로그에 남긴다.
+log = logging.getLogger("storyboard-bot")
 
 
 def _with_retry(fn, *args, retries: int = 1, **kwargs):
@@ -857,6 +861,7 @@ def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
         path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=episode,
                                        want_audio=_clip_has_dialogue(clip))
     except Exception as e:
+        log.exception("영상화 실패 (씬%s 클립 %s): %s", scene_num, clip_id, e)
         return {"clip_id": clip_id, "status": "still_only", "still_png": png, "error": str(e)}
     return {"clip_id": clip_id, "status": "ok", "still_png": png, "video_path": path}
 
@@ -1107,12 +1112,12 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
         jobs.update(job_id, stage=f"씬{scene_num} 배경·의상 준비 중")
         try:
             ensure_scene_costumes(work, scene, characters=characters, mood=mood)
-        except Exception:
-            pass  # 미등록 의상 자동 설계 실패해도 이어감
+        except Exception as e:
+            log.exception("의상 자동 설계 실패 (씬%s): %s", scene_num, e)  # 실패해도 이어감
         try:
             ensure_scene_references(work, scene, mood=mood, conti_body=conti_text)
-        except Exception:
-            pass
+        except Exception as e:
+            log.exception("씬 참조(배경·소품) 생성 실패 (씬%s): %s", scene_num, e)
 
         # ★2026-07-22: 미리보기 스틸 = 클립당 대표 1장. co-writer-bot 병렬 구조 이식 — 클립들을
         # ThreadPoolExecutor(OPENROUTER_IMG_WORKERS)로 '독립 그룹 병렬' 생성한다(클립당 1장이라
@@ -1128,7 +1133,8 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
             ci, clip = ci_clip
             try:
                 png, _cost = generate_clip_still(scene, clip, work=work, characters=characters)
-            except Exception:
+            except Exception as e:
+                log.exception("스틸 생성 실패 (씬%s 클립 %s): %s", scene_num, clip.get("clip_id"), e)
                 return
             clip_id = clip.get("clip_id")
             try:
