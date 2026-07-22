@@ -498,7 +498,9 @@ def scene_element_needs(scene: dict) -> list[tuple[str, str]]:
     if scene.get("location_tag"):
         add(scene["location_tag"], "place")
     for c in scene.get("cast") or []:
-        add(c.get("costume"), "costume")
+        costume = c.get("costume")
+        if costume and "미등록" not in costume:  # '⚠ 미등록'은 실제 의상 아님 → 요소로 만들지 않음
+            add(costume, "costume")
     for name in scene_prop_names(scene):
         add(name, "prop")
     return needs

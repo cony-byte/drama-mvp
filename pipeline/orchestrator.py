@@ -618,6 +618,73 @@ def ensure_scene_references(work: str, scene: dict, mood: str = "",
     return fix_element_references(work, mood=mood, conti_full=conti_body, only=displays)
 
 
+def _design_costume(character: dict, scene: dict, mood: str = "") -> str:
+    """캐릭터(외모·신분/성격)와 장면 배경에 어울리는 '평상 의상' 한 벌을 구체적 시각 묘사(색·상/하의·
+    소재·핏·디테일)로 설계해 한국어 한두 문장으로 반환한다. 참조 이미지 생성 context 및 의상 설명으로
+    쓰인다. 실패하면 빈 문자열(호출부가 무난한 기본 디자인으로 폴백)."""
+    name = character.get("name") or "인물"
+    appearance = (character.get("appearance") or "").strip()
+    desc = (character.get("description") or "").strip()
+    setting = scene.get("location_tag") or ""
+    system = (
+        "너는 숏폼 드라마 의상 스타일리스트다. 주어진 인물과 장면에 자연스럽게 어울리는 평상 의상 "
+        "한 벌을 골라, 옷만 구체적인 시각 묘사로 답한다. 상의·하의(또는 원피스)·색·소재·핏·눈에 "
+        "띄는 디테일을 담되 한국어 1~2문장(짧게)으로만, 따옴표·군더더기 없이 옷 묘사만 낸다. "
+        "인물의 신분·직업·성격과 장면 배경에 맞춰라(예: 편의점 알바생=근무 유니폼, 신분 숨긴 재벌가 "
+        "인물=고급스럽지만 튀지 않는 미니멀 캐주얼). 얼굴·헤어·표정은 절대 언급하지 마라 — 옷만.")
+    user = (f"인물: {name}\n외모: {appearance or '미상'}\n신분/성격: {desc or '미상'}\n"
+            f"장면 배경: {setting or '미상'}\n작품 톤: {mood or '미상'}\n\n"
+            "이 인물이 이 장면에서 입을 의상 한 벌을 묘사해줘.")
+    try:
+        out = " ".join(_cw_complete(system, user).split()).strip().strip('"' + "'")
+        return out[:140]
+    except Exception:
+        return ""
+
+
+def ensure_scene_costumes(work: str, scene: dict, characters: list[dict] | None = None,
+                          mood: str = "") -> dict:
+    """스틸 생성 전, 이 씬 cast 중 의상이 '⚠ 미등록'인 인물마다 어울리는 의상을 설계·등록하고
+    참조 이미지를 만들어 그 인물에게 배정한다(★2026-07-22, 사용자 지시 — 미등록 의상은 스틸
+    만들 때 알아서 만들어 등록). 인물별 안정 라벨('{이름} 의상')로 등록해 씬이 바뀌어도 같은
+    의상을 재사용한다 — 이미 등록+참조이미지가 있으면 재설계·재생성 없이 배정만 한다. cast의
+    costume 필드를 실제 라벨로 갱신하므로, 이후 _clip_pseudo_shot·WARDROBE LOCK·참조 매칭이
+    자연히 그 의상을 쓴다. 반환: {designed, reused, failed}. 실패는 그 인물만 건너뛴다."""
+    char_by_name = {c.get("name"): c for c in (characters or []) if c.get("name")}
+    designed = reused = failed = 0
+    for c in scene.get("cast") or []:
+        name = c.get("name")
+        costume = c.get("costume") or ""
+        if not name or (costume and "미등록" not in costume):
+            continue  # 이름 없음 또는 이미 등록 의상 있음 → 건드리지 않음
+        label = f"{name} 의상"
+        existing = oi.resolve_element(work, label)
+        if existing and existing.get("file"):
+            c["costume"] = existing.get("display") or label  # 이전 씬에서 만든 의상 재사용
+            reused += 1
+            continue
+        try:
+            design = _design_costume(char_by_name.get(name) or {"name": name}, scene, mood=mood)
+            el = oi.register_element(work, label, etype="costume")
+            if design:  # 의상 설명을 요소에 저장(WARDROBE LOCK·비전 후검사 근거)
+                try:
+                    elems = oi.load_elements(work)
+                    for e in elems:
+                        if e.get("id") == (el or {}).get("id"):
+                            e["description"] = design
+                    oi._save_elements(work, elems)
+                except Exception:
+                    pass
+            prompt = _element_ref_prompt(label, "costume", mood=mood, context=design)
+            png, _cost = _with_retry(oi.generate, prompt, size="832x832", refs=[])
+            _register_element_image(work, label, "costume", png)
+            c["costume"] = label
+            designed += 1
+        except Exception:
+            failed += 1
+    return {"designed": designed, "reused": reused, "failed": failed}
+
+
 # ── v3.1 파이프라인 7·8단계: 클립 단위 대표 스틸 + 멀티샷 영상 ────────────────
 # 기존 shot 단위(generate_image_for_shot / generate_cuts_for_scene)를 건드리지 않고, 클립을
 # 영상 생성 1회 단위로 삼는 새 경로다. 대표 스틸 1장(+필요 시 보강컷)을 앵커로, 클립 전체 블록
@@ -630,15 +697,69 @@ def _clip_ordinal(clip_id: str | None) -> int:
     return (ord(letter) - ord("A") + 1) if "A" <= letter <= "Z" else 0
 
 
-def _clip_pseudo_shot(scene: dict, clip: dict, block: dict) -> dict:
+def _name_in_target(name: str, target: str) -> bool:
+    """cast 이름이 구도 대상 문자열에 등장하는지 — 콘티가 '이수진'을 '수진'처럼 성 한 글자를
+    뗀 짧은 이름으로 쓰는 경우까지 매칭한다(실측: '강태민 위주(수진 걸침)'에서 '이수진'을 놓침)."""
+    if not (name and target):
+        return False
+    if name in target:
+        return True
+    return len(name) >= 3 and name[1:] in target  # 성(1글자) 뗀 이름(이수진→수진)
+
+
+def _block_participants(scene: dict, block: dict | None) -> list[str] | None:
+    """이 블록에 확실히 '단독'으로 등장하는 1인만 반환. 그 외(2인·위주·OTS·인서트·파싱 실패)는
+    None을 반환해 호출부가 전체 cast로 폴백하게 한다 — 위주/걸침·OTS는 상대도 프레임에 보이므로
+    함부로 줄이면 필요한 인물을 떨어뜨린다. '단독' 컷에서만, 이름이 정확히 1명 매칭될 때 좁힌다."""
+    cast_names = [c.get("name") for c in (scene.get("cast") or []) if c.get("name")]
+    target = v3_schema.parse_composition_header((block or {}).get("header") or "").get("target") or ""
+    if target.endswith("단독"):
+        present = [n for n in cast_names if _name_in_target(n, target)]
+        if len(present) == 1:
+            return present
+    return None
+
+
+def _clip_pseudo_shot(scene: dict, clip: dict, block: dict, work: str | None = None,
+                      characters: list[dict] | None = None) -> dict:
     """클립 대표 블록을 기존 이미지 생성기(generate_image_for_shot)가 이해하는 shot 유사 dict로
-    변환한다 — 그래야 요소 참조(얼굴·의상·장소·소품) 매칭과 의상 잠금 로직을 그대로 재사용한다."""
+    변환한다 — 그래야 요소 참조(얼굴·의상·장소·소품) 매칭과 의상 잠금 로직을 그대로 재사용한다.
+
+    ★2026-07-22(의상 뒤바뀜 수정): 세 가지를 바로잡는다.
+    (1) 예전엔 씬 전체 cast의 인물·의상을 모든 클립에 붙여, 남자만 나오는 단독 컷에도 여자의
+        의상 참조가 딸려가 뒤섞였다 — 블록 대상에 실제로 등장하는 인물만 남긴다(2인/인서트 등
+        대상이 이름을 안 가리키면 종전대로 전체 cast).
+    (2) 의상 값을 등록 엘리먼트의 display로 정규화한다 — shot_refs_with_instructions의 착용자
+        매칭이 '의상 라벨==엘리먼트 display' 문자열 동일성에 의존하는데, 공백·하이픈 별칭 병합으로
+        둘이 어긋나면 "이 옷은 X 전용, Y엔 금지" 문구가 조용히 이름 없는 일반 문구로 degrade돼
+        인물 간 의상이 뒤바뀌던 원인(★실측). display로 맞춰 매칭이 항상 성사되게 한다.
+    (3) ★실측 근본 원인: 의상이 씬 헤더에 '⚠ 미등록'으로 남으면 등록 의상이 하나도 없어
+        WARDROBE LOCK이 아무 것도 못 잡고, 옷 정보가 프롬프트에 전혀 안 실려 모델이 옷을
+        지어내 화면 초점 인물(예: 손님 남자)에게 엉뚱한 옷(편의점 유니폼)을 입혔다. 그래서
+        (a) '미등록' 의상은 costume에서 버리고, (b) 캐릭터 appearance(옷 서술 포함)를 인물별로
+        묶어 appearances로 실어 보낸다 — generate_image_for_shot이 인물↔외모/의상을 못박는다."""
     cast = scene.get("cast") or []
+    present = _block_participants(scene, block)
+    if present is not None:
+        cast = [c for c in cast if c.get("name") in present]
+    appearance_by_name = {c.get("name"): (c.get("appearance") or "").strip()
+                          for c in (characters or []) if c.get("name")}
+    costumes = {}
+    appearances = {}
+    for c in cast:
+        name, costume = c.get("name"), c.get("costume")
+        if not name:
+            continue
+        if costume and "미등록" not in costume:  # '⚠ 미등록'은 등록 의상 아님 → 무시
+            el = oi.resolve_element(work, costume) if work else None
+            costumes[name] = (el.get("display") if el and el.get("display") else costume)
+        if appearance_by_name.get(name):
+            appearances[name] = appearance_by_name[name]
     return {
         "n": _clip_ordinal(clip.get("clip_id")),
         "characters": [c["name"] for c in cast if c.get("name")],
-        "costumes": {c["name"]: c["costume"] for c in cast
-                     if c.get("name") and c.get("costume")},
+        "costumes": costumes,
+        "appearances": appearances,
         "places": [scene["location_tag"]] if scene.get("location_tag") else [],
         "props": v3_schema.scene_prop_names(scene),
         "prompt": sb_prompts.clip_still_prompt(scene, clip, block),
@@ -648,13 +769,15 @@ def _clip_pseudo_shot(scene: dict, clip: dict, block: dict) -> dict:
 
 def generate_clip_still(scene: dict, clip: dict, work: str | None = None,
                         block: dict | None = None,
-                        continuity_png: bytes | None = None) -> tuple[bytes, float]:
+                        continuity_png: bytes | None = None,
+                        characters: list[dict] | None = None) -> tuple[bytes, float]:
     """클립의 대표(또는 지정 보강) 블록으로 앵커 스틸 1장 생성 → (PNG, cost$). continuity_png가
-    있으면(같은 씬의 직전 승인 스틸) 연속성 앵커로 넘긴다(규칙 3)."""
+    있으면(같은 씬의 직전 승인 스틸) 연속성 앵커로 넘긴다(규칙 3). characters(프로젝트 캐릭터,
+    appearance 포함)를 주면 인물별 외모·의상을 프롬프트에 못박아 인물 간 의상 뒤바뀜을 막는다."""
     block = block or v3_schema.representative_block(clip)
     if not block:
         raise RuntimeError(f"클립 {clip.get('clip_id')}: 대표 스틸로 삼을 블록이 없어요.")
-    shot = _clip_pseudo_shot(scene, clip, block)
+    shot = _clip_pseudo_shot(scene, clip, block, work=work, characters=characters)
     continuity_refs = None
     if continuity_png:
         prev_ord = max(0, _clip_ordinal(clip.get("clip_id")) - 1)
@@ -674,7 +797,8 @@ def generate_video_for_clip(work: str, scene_num: int, clip_id: str, png: bytes,
 
 def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
                  continuity_png: bytes | None = None,
-                 still_png: bytes | None = None) -> dict:
+                 still_png: bytes | None = None,
+                 characters: list[dict] | None = None) -> dict:
     """클립 하나를 스틸→영상까지 완주(문서 5단계 씬 내부의 클립 단위 실행). 스틸은 저장(승인 대상),
     영상 실패는 그 클립만 실패로 남기고 스틸은 보존(재생성 비용 방지). 반환: {clip_id, status,
     still_png, video_path?, error?}.
@@ -685,7 +809,8 @@ def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
     png = still_png
     if png is None:
         try:
-            png, _cost = generate_clip_still(scene, clip, work=work, continuity_png=continuity_png)
+            png, _cost = generate_clip_still(scene, clip, work=work, continuity_png=continuity_png,
+                                             characters=characters)
         except Exception as e:
             return {"clip_id": clip_id, "status": "failed", "still_png": None, "error": str(e)}
         try:
@@ -710,7 +835,8 @@ def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
 def produce_scene(work: str, scene: dict, episode: int = 1,
                   prior_handoff: dict | None = None, mood: str = "",
                   conti_body: str = "", on_progress=None,
-                  approved_stills: dict[str, bytes] | None = None) -> dict:
+                  approved_stills: dict[str, bytes] | None = None,
+                  characters: list[dict] | None = None) -> dict:
     """씬 하나 완주 — 6단계 레퍼런스 → 클립별 스틸·영상(produce_clip) → 핸드오프 생성. 같은 씬의
     직전 클립 승인 스틸을 다음 클립의 연속성 앵커로 넘긴다(규칙 3). 모든 클립 성공 시 state를
     completed로. 반환: {scene_num, state, clips, handoff}.
@@ -729,6 +855,10 @@ def produce_scene(work: str, scene: dict, episode: int = 1,
     if not all_reused:
         notify(None, "레퍼런스 준비 중")
         try:
+            ensure_scene_costumes(work, scene, characters=characters, mood=mood)
+        except Exception:
+            pass  # 의상 자동 설계 실패해도 이어감
+        try:
             ensure_scene_references(work, scene, mood=mood, conti_body=conti_body)
         except Exception:
             pass  # 레퍼런스 생성 실패해도 스틸 생성은 이어감(참조 없이라도)
@@ -740,7 +870,7 @@ def produce_scene(work: str, scene: dict, episode: int = 1,
         reused = approved_stills.get(cid)
         notify(cid, "영상화 중(승인 스틸)" if reused else "스틸·영상 생성 중")
         r = produce_clip(work, scene, clip, episode=episode,
-                         continuity_png=prev_still, still_png=reused)
+                         continuity_png=prev_still, still_png=reused, characters=characters)
         if r.get("still_png"):
             prev_still = r["still_png"]  # 다음 클립 연속성 앵커
         clip_results.append(r)
@@ -825,7 +955,7 @@ def produce_episode_v3(work: str, script: str, skeleton_scenes: list[tuple[int, 
 
         sr = produce_scene(work, scene, episode=episode, prior_handoff=handoff,
                            mood=mood, conti_body=conti_text, on_progress=on_progress,
-                           approved_stills=approved_stills)
+                           approved_stills=approved_stills, characters=characters)
         scene_plan = [_clip_plan_segment(scene, clip, cr["video_path"])
                       for clip, cr in zip(scene.get("clips") or [], sr["clips"])
                       if cr.get("video_path")]
@@ -928,6 +1058,10 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
 
         jobs.update(job_id, stage=f"씬{scene_num} 배경·의상 준비 중")
         try:
+            ensure_scene_costumes(work, scene, characters=characters, mood=mood)
+        except Exception:
+            pass  # 미등록 의상 자동 설계 실패해도 이어감
+        try:
             ensure_scene_references(work, scene, mood=mood, conti_body=conti_text)
         except Exception:
             pass
@@ -938,7 +1072,8 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
             clip_id = clip.get("clip_id")
             jobs.update(job_id, stage=f"씬{scene_num} {clip_id} 대표 스틸 생성 중")
             try:
-                png, _cost = generate_clip_still(scene, clip, work=work, continuity_png=prev_still)
+                png, _cost = generate_clip_still(scene, clip, work=work, continuity_png=prev_still,
+                                                 characters=characters)
             except Exception:
                 continue  # 이 클립 스틸 실패 — 건너뛰고 다음 클립
             prev_still = png
@@ -1455,13 +1590,47 @@ def generate_image_for_shot(shot: dict, work: str | None = None,
             "do not introduce absent characters or transfer a face or outfit between characters. "
             "Do not copy its pose, expression, gaze, action, or camera framing into the current shot.")
     prompt = f"{_shot_continuity_prompt(shot, connected_cut_nums)}\n{shot['prompt']}{SEMI_REAL_SUFFIX}"
+    # ★2026-07-22: 의상 뒤바뀜(한 인물이 다른 인물 옷을 입는 사고) 수정 — "적용 금지"(부정)만으론
+    # 부족해, 인물↔의상을 positive로 강하게 묶고(각 의상의 시각 특징 텍스트도 함께), 2인 이상이면
+    # 서로의 옷을 못 입게 쌍방 부정 제약을 명시하고, 이 매핑을 프롬프트 앞·뒤에 반복한다.
     assignments = shot.get("costumes") or {}
     if isinstance(assignments, dict) and assignments:
-        wardrobe = "\n".join(
-            f"- {character} wears '{costume}' exactly; never swap or mix this outfit with another character."
-            for character, costume in assignments.items() if character and costume)
-        if wardrobe:
-            prompt = f"WARDROBE LOCK — character-to-outfit assignment:\n{wardrobe}\n\n{prompt}"
+        items = [(c, o) for c, o in assignments.items() if c and o]
+        if items:
+            lines = []
+            for character, costume in items:
+                desc = ""
+                if work:
+                    el = oi.resolve_element(work, costume)
+                    d = (el.get("description") or "").strip() if el else ""
+                    if d:
+                        desc = f" ({d})"
+                lines.append(f"- {character} wears ONLY the outfit '{costume}'{desc}; this outfit "
+                             f"belongs exclusively to {character}.")
+            if len(items) >= 2:
+                for character, _costume in items:
+                    others = [f"{c2}'s '{o2}'" for c2, o2 in items if c2 != character]
+                    lines.append(f"- {character} must never wear {', '.join(others)}.")
+            lines.append("- Do not swap, merge, blend, duplicate, or transfer clothing between "
+                         "characters. Each character keeps their own separate wardrobe.")
+            reminder = ("REMINDER — strict wardrobe: "
+                        + "; ".join(f"{c} = '{o}' only" for c, o in items)
+                        + ". Never transfer clothing between characters.")
+            prompt = ("WARDROBE LOCK — strict character-to-outfit assignment:\n"
+                      + "\n".join(lines) + f"\n\n{prompt}\n\n{reminder}")
+    # ★2026-07-22: 등록 의상이 없어도(씬 헤더 '⚠ 미등록') 캐릭터 appearance(머리·눈·옷차림 서술)를
+    # 인물별로 묶어 못박는다 — 이게 없으면 옷 정보가 프롬프트에 전혀 안 실려, 모델이 옷을 지어내
+    # 화면 초점 인물에게 다른 인물의 옷(예: 알바생 유니폼)을 입히는 사고가 남. 얼굴 참조가 있어도
+    # 참조 사진 속 옷을 인물 간에 옮겨 입히지 못하도록 "각자 것 유지" 가드를 함께 건다.
+    appearances = shot.get("appearances") or {}
+    if isinstance(appearances, dict):
+        appearance_items = [(n, a) for n, a in appearances.items() if n and a]
+        if appearance_items:
+            app_lines = [f"- {name}: {appr}" for name, appr in appearance_items]
+            guard = ("각 서술은 그 이름의 인물에게만 적용한다. 인물의 머리·얼굴·옷차림을 서로 "
+                     "바꾸거나 섞지 말 것 — 특히 한 인물의 옷을 다른 인물에게 입히지 마라.")
+            prompt = ("등장인물별 외모·의상(이름별 고정):\n" + "\n".join(app_lines)
+                      + f"\n{guard}\n\n{prompt}")
     if ref_lines:
         joined_ref_lines = "\n".join(ref_lines)
         prompt = f"{joined_ref_lines}\n\n{prompt}"
@@ -1978,17 +2147,58 @@ def regenerate_cut_still(project: dict, episode: dict, scene_num: int, cut_num: 
             "prompt": shot.get("prompt", ""), "image": oi.png_data_url(png), "video_path": None}
 
 
-def videoize_cut_job(project: dict, episode: dict, scene_num: int, cut_num: int, job_id: str) -> None:
+def _find_v3_scene_clip(episode: dict, scene_num: int, clip_id: str):
+    """v3_scenes의 그 씬 콘티를 파싱해 (scene_dict, clip_dict)를 돌려준다. 못 찾으면 (None, None)."""
+    for s in (episode.get("v3_scenes") or []):
+        if int(s.get("scene_num") or -1) != scene_num:
+            continue
+        conti = s.get("conti_text")
+        parsed = parsing.split_scenes(conti) if conti else None
+        if not parsed:
+            return None, None
+        _, hdr, body = parsed[0]
+        scene = v3_schema.parse_scene(hdr, body)
+        scene["scene_num"] = scene_num
+        clip = next((c for c in (scene.get("clips") or []) if c.get("clip_id") == clip_id), None)
+        return scene, clip
+    return None, None
+
+
+def _persist_cut_video(episode: dict, scene_num: int, cut_num: int, video_path: str, save_fn) -> None:
+    """생성한 영상 경로를 그 컷 스틸(scene_stills + v3_scenes[].stills)에 저장 — 페이지를 넘겨도,
+    재로드해도 그 컷에 영상이 유지되게 한다(★2026-07-22, 페이지네이션 이슈)."""
+    def _mark(s):
+        if s.get("scene_num") == scene_num and s.get("cut_num") == cut_num:
+            return {**s, "video_path": video_path}
+        return s
+    fields = {"scene_stills": [_mark(s) for s in (episode.get("scene_stills") or [])]}
+    v3 = episode.get("v3_scenes") or []
+    if v3:
+        new_v3 = []
+        for s in v3:
+            if int(s.get("scene_num") or -1) == scene_num and s.get("stills"):
+                s = {**s, "stills": [_mark(st) for st in s["stills"]]}
+            new_v3.append(s)
+        fields["v3_scenes"] = new_v3
+    save_fn(**fields)
+
+
+def videoize_cut_job(project: dict, episode: dict, job_id: str, save_fn=None, *,
+                     scene_num: int, cut_num: int, note: str = "") -> None:
     """미리보기(또는 재생성)로 만들어둔 특정 컷 스틸을 그대로 영상화. 백그라운드 스레드 전제
-    (예외는 jobs에 error로 남김) — server.py가 threading.Thread로 호출."""
+    (예외는 jobs에 error로 남김) — server.py가 _run_with_locked_references로 호출(save_fn 주입).
+
+    note가 있으면(사용자가 '다시 영상화' 시 입력한 의견) 모션 프롬프트 끝에 최우선 지시로 덧붙인다.
+
+    ★2026-07-22(인물 뒤바뀜 수정): 스틸은 v3 scene_stills에서 가져오면서 모션 프롬프트는 구
+    shots_by_scene[cut_num]에서 가져오던 버그 — 두 콘티는 컷 순서/내용이 완전히 달라(구 shot n=1이
+    '강태민 바코드'인데 v3 클립1은 '이수진 진열대') 여자 스틸에 남자 모션이 붙어 영상에서 인물이
+    바뀌었다. v3 스틸(clip_id 보유)이면 v3_scenes 콘티에서 그 클립을 찾아 v3 멀티샷 모션으로
+    영상화하고, clip_id가 없는 구 파이프라인 컷만 shots_by_scene 경로를 쓴다."""
     work = project["work"]
     num = episode["num"]
     try:
         project_setup.ensure_project(work)
-        shots_by_scene = _norm_shots(episode.get("shots_by_scene") or {})
-        shot = next((s for s in (shots_by_scene.get(scene_num) or []) if s.get("n") == cut_num), None)
-        if not shot:
-            raise RuntimeError(f"씬{scene_num} 컷{cut_num}을 찾을 수 없어요.")
         still = next((s for s in (episode.get("scene_stills") or [])
                      if s.get("scene_num") == scene_num and s.get("cut_num") == cut_num and s.get("image")),
                     None)
@@ -1996,9 +2206,31 @@ def videoize_cut_job(project: dict, episode: dict, scene_num: int, cut_num: int,
             raise RuntimeError("이 컷의 스틸이 없어요. 먼저 이미지를 만들어주세요.")
         png = oi.data_url_to_png(still["image"])
         jobs.update(job_id, stage="영상화 중")
-        path = generate_video_for_cut(work, scene_num, cut_num, png,
-                                      motion_prompt=shot.get("caption", shot["prompt"]),
-                                      episode=num, shot=shot)
+        note = (note or "").strip()
+        clip_id = still.get("clip_id")
+        if clip_id:  # v3 클립 — 그 클립의 멀티샷 모션 프롬프트로 영상화(구 shots_by_scene 무시)
+            scene, clip = _find_v3_scene_clip(episode, scene_num, clip_id)
+            if not clip:
+                raise RuntimeError(f"v3 씬{scene_num} 클립 {clip_id}의 콘티를 찾을 수 없어요.")
+            motion = sb_prompts.clip_motion_prompt(scene, clip)
+            if note:
+                motion = f"{motion}\n\n[사용자 요청 반영 — 아래 지시를 최우선으로]: {note}"
+            path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=num)
+        else:  # 구 shot 파이프라인 컷
+            shots_by_scene = _norm_shots(episode.get("shots_by_scene") or {})
+            shot = next((s for s in (shots_by_scene.get(scene_num) or []) if s.get("n") == cut_num), None)
+            if not shot:
+                raise RuntimeError(f"씬{scene_num} 컷{cut_num}을 찾을 수 없어요.")
+            motion_prompt = shot.get("caption", shot["prompt"])
+            if note:
+                motion_prompt = f"{motion_prompt}\n\n[사용자 요청 반영]: {note}"
+            path = generate_video_for_cut(work, scene_num, cut_num, png,
+                                          motion_prompt=motion_prompt, episode=num, shot=shot)
+        if save_fn:
+            try:
+                _persist_cut_video(episode, scene_num, cut_num, path, save_fn)
+            except Exception:
+                pass  # 저장 실패해도 job엔 영상이 있으니 즉시 표시는 됨
         jobs.update(job_id, status="done", stage="완료", video_path=path)
     except Exception as e:
         jobs.update(job_id, status="error", stage="오류", error=str(e))

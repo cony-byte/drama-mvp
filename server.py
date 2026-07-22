@@ -562,9 +562,11 @@ def studio_delete_cut(project_id: str, num: int, scene_num: int, cut_num: int):
 
 
 @app.post("/api/studio/{project_id}/episodes/{num}/cuts/{scene_num}/{cut_num}/videoize")
-def studio_videoize_cut(project_id: str, num: int, scene_num: int, cut_num: int):
+def studio_videoize_cut(project_id: str, num: int, scene_num: int, cut_num: int, note: str = ""):
     """미리보기(또는 재생성)로 만들어둔 특정 컷 스틸을 그대로 영상화 — 백그라운드 job.
-    프론트가 /api/jobs/{id} 폴링으로 완료·영상 URL을 받는다(기존 job 메커니즘 재사용)."""
+    note: '다시 영상화' 시 사용자가 입력한 의견(모션 프롬프트에 최우선 지시로 반영).
+    프론트가 /api/jobs/{id} 폴링으로 완료·영상 URL을 받는다(기존 job 메커니즘 재사용).
+    완료 시 영상 경로를 그 컷 스틸에 저장해 페이지를 넘겨도·재로드해도 영상이 유지된다."""
     project = studio.get_project(project_id)
     if not project:
         raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
@@ -572,10 +574,27 @@ def studio_videoize_cut(project_id: str, num: int, scene_num: int, cut_num: int)
     if not episode:
         raise HTTPException(404, "화를 찾을 수 없어요.")
     job_id = jobs.create()
-    threading.Thread(target=videoize_cut_job,
-                     args=(project, episode, scene_num, cut_num, job_id),
-                     daemon=True).start()
+    threading.Thread(
+        target=_run_with_locked_references,
+        args=(partial(videoize_cut_job, scene_num=scene_num, cut_num=cut_num, note=note),
+              project_id, num, job_id),
+        daemon=True).start()
     return {"job_id": job_id}
+
+
+@app.get("/api/studio/{project_id}/episodes/{num}/cuts/{scene_num}/{cut_num}/video")
+def studio_get_cut_video(project_id: str, num: int, scene_num: int, cut_num: int):
+    """그 컷 스틸에 저장된 영상 파일을 서빙(영상화 결과가 페이지 넘겨도·재로드해도 유지되게).
+    job 기반 /api/jobs/{id}/video와 달리 화 데이터(scene_stills[].video_path)에서 읽는다."""
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    still = next((s for s in (episode.get("scene_stills") or [])
+                 if s.get("scene_num") == scene_num and s.get("cut_num") == cut_num and s.get("video_path")),
+                None)
+    if not still or not os.path.exists(still["video_path"]):
+        raise HTTPException(404, "이 컷의 영상이 아직 없어요.")
+    return FileResponse(still["video_path"], media_type="video/mp4")
 
 
 @app.post("/api/studio/{project_id}/episodes/{num}/produce")
