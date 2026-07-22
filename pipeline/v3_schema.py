@@ -13,7 +13,7 @@
     무드/조명: 차가운 데이라이트, 블루-그레이 톤. 넓고 화려하지만 냉랭한 공간감
 
     ─ 클립 2-A · 8초 · 찻잔을 뿜다 ─
-    [3초] 미디엄/아이레벨/반측면/연우 위주(서아 걸침) — ...
+    [3초] 미디엄(허리 위)/아이레벨/반측면-좌/연우 위주(서아 걸침) — ...
     에셋: 스틸 (미정) · 영상 (미정) · 레퍼런스 (미정)
 
 씬 헤더 자체(■ 씬N ...)는 pipeline.parsing.split_scenes()가 이미 (num, header, body)로
@@ -188,14 +188,112 @@ def parse_scene(header_line: str, scene_body: str) -> dict:
     }
 
 
+# ── 구도 헤더 검증 (프롬프트 "구도 헤더 — 블록 첫머리 4값 고정" 절) ──────────
+# 지금까지는 이 4값(샷/앵글/방향/대상)의 형식·어휘 준수를 코드가 전혀 검사하지 않고 LLM
+# 프롬프트 지시에만 맡겼다(★2026-07-22) — 여기서부터 결정론적으로 기계 검증한다.
+
+_SHOT_TYPES = ("전신", "미디엄", "클로즈업", "익스트림클로즈업", "인서트")
+_SHOT_NEEDS_CUTLINE = ("미디엄", "클로즈업")  # "클로즈업·미디엄은 컷라인 생략 금지"
+_ANGLES = ("아이레벨", "로우", "하이")
+_DIR_NEEDS_SIDE = ("반측면", "측면")  # "단독·위주 샷은 좌/우 생략 금지(2인 대칭은 생략 가능)"
+# 위주 태그 괄호 안은 '{상대} 걸침'이 기본이되, OTS 컷에선 뒤에 '·프레임 좌/우'가 더 붙는다
+# (예: '선우 위주(리안 어깨 걸침·프레임 왼쪽)') — 그래서 괄호 안 내용은 열어두고 괄호 유무만 본다.
+_TARGET_RE = re.compile(
+    r"^(2인|인서트-.+|.+?\s위주\(.+?\)|.+?\s단독)$")
+
+
+def parse_composition_header(header: str) -> dict:
+    """구도 헤더 문자열(예: '클로즈업(가슴 위)/아이레벨/반측면-좌/이수진 위주(강태민 걸침)')을
+    {샷, 앵글, 방향, 대상} 4값으로 쪼갠다. 인서트 샷은 방향을 생략할 수 있어(규칙상 허용) 3
+    세그먼트만 있어도 방향=None으로 받아들인다. 슬래시 개수가 이 범위를 벗어나면
+    segments에 원본 조각을 그대로 담고 나머지는 None — 검증은 별도 함수가 담당(파싱 자체는
+    실패시켜 예외를 던지지 않는다)."""
+    parts = [p.strip() for p in (header or "").split("/")]
+    shot = parts[0] if len(parts) > 0 else None
+    if len(parts) == 4:
+        angle, direction, target = parts[1], parts[2], parts[3]
+    elif len(parts) == 3 and shot and shot.startswith("인서트"):
+        angle, direction, target = parts[1], None, parts[2]
+    else:
+        angle = parts[1] if len(parts) > 1 else None
+        direction = parts[2] if len(parts) > 2 else None
+        target = parts[3] if len(parts) > 3 else (parts[-1] if len(parts) > 2 else None)
+    return {"shot": shot, "angle": angle, "direction": direction, "target": target,
+           "segment_count": len(parts)}
+
+
+def validate_composition_header(header: str | None) -> list[str]:
+    """구도 헤더 4값(샷/앵글/방향/대상)의 형식·어휘를 검증. 통과하면 빈 리스트.
+    프롬프트(SCENE_BLOCKS_ROLE)가 지시하는 규칙 중 기계적으로 판정 가능한 것만 검사한다 —
+    문장 구조 판단(예: "구도가 자연스러운가")까지는 못하고, 정해진 값·표기 형식만 본다."""
+    if not header:
+        return ["구도 헤더가 없어요(블록이 '샷/앵글/방향/대상 — 서술' 형식이 아니에요)."]
+    h = parse_composition_header(header)
+    errors = []
+
+    shot = h["shot"]
+    if not shot or not shot.startswith(_SHOT_TYPES):
+        errors.append(f"구도 헤더 '{header}': 샷 값이 {'/'.join(_SHOT_TYPES)} 중 하나로 "
+                      f"시작하지 않아요.")
+    elif shot.startswith(_SHOT_NEEDS_CUTLINE) and "(" not in shot:
+        errors.append(f"구도 헤더 '{header}': {shot} 샷은 컷라인을 괄호로 명시해야 해요"
+                      f"(예: 미디엄(허리 위)).")
+
+    if h["segment_count"] not in (3, 4):
+        errors.append(f"구도 헤더 '{header}': 슬래시로 나눈 값이 {h['segment_count']}개예요 — "
+                      f"'샷/앵글/방향/대상' 4개(인서트는 방향 생략 시 3개)여야 해요.")
+
+    angle = h["angle"]
+    if angle not in _ANGLES:
+        errors.append(f"구도 헤더 '{header}': 앵글 값 '{angle}'이 {'/'.join(_ANGLES)} 중 "
+                      f"하나가 아니에요.")
+
+    target = h["target"]
+    if not target or not _TARGET_RE.match(target):
+        errors.append(f"구도 헤더 '{header}': 대상 값 '{target}'이 '2인' / '{{이름}} 단독' / "
+                      f"'{{이름}} 위주({{상대}} 걸침)' / '인서트-{{서술}}' 형식이 아니에요"
+                      f"(대상 칸에 설명 문장을 그대로 쓰지 마세요).")
+
+    direction = h["direction"]
+    is_insert_shot = bool(shot and shot.startswith("인서트"))
+    is_pair_target = bool(target and target.startswith("2인"))
+    if direction is None:
+        if not is_insert_shot:
+            errors.append(f"구도 헤더 '{header}': 방향 값이 없어요(인서트 샷만 방향을 생략할 "
+                          f"수 있어요).")
+    elif direction.startswith("OTS"):
+        # 프롬프트 스펙: OTS는 방향칸에 맨값 'OTS'만 쓰고, 걸침 어깨의 프레임 좌/우는 대상 괄호
+        # 안에 명시한다(예: 'OTS/선우 위주(리안 어깨 걸침·프레임 왼쪽)'). 그래서 방향칸의 OTS엔
+        # 좌/우를 요구하지 않는다(대상 괄호 안의 좌/우 표기까지는 기계로 판정하지 않는다).
+        pass
+    elif direction.startswith(_DIR_NEEDS_SIDE):
+        base = direction.split("-")[0]
+        if base not in _DIR_NEEDS_SIDE:
+            errors.append(f"구도 헤더 '{header}': 방향 값 '{direction}'을 못 알아봤어요.")
+        elif "-" not in direction and not is_pair_target:
+            errors.append(f"구도 헤더 '{header}': 단독·위주 샷은 방향의 좌/우를 생략할 수 "
+                          f"없어요(현재: '{direction}', 대상: '{target}'). 2인 대칭 샷만 생략 "
+                          f"가능해요.")
+        elif "-" in direction and direction.split("-", 1)[1] not in ("좌", "우"):
+            errors.append(f"구도 헤더 '{header}': 방향 좌/우 표기가 '좌'/'우'가 아니에요"
+                          f"(현재: '{direction}').")
+    elif direction != "정면":
+        errors.append(f"구도 헤더 '{header}': 방향 값 '{direction}'이 정면/반측면-좌·우/"
+                      f"측면-좌·우/OTS 중 하나가 아니에요.")
+
+    return errors
+
+
 # ── 검증 (셀프체크 365~386행 중 결정론적으로 기계 검증 가능한 항목) ──────
 
 def validate_clip(clip: dict) -> list[str]:
-    """클립 하나의 시간 규칙 위반을 사람이 읽을 문자열 리스트로. 통과하면 빈 리스트."""
+    """클립 하나의 시간 규칙 + 구도 헤더 형식 위반을 사람이 읽을 문자열 리스트로. 통과하면
+    빈 리스트."""
     errors = []
     cid = clip.get("clip_id", "?")
     declared = clip.get("declared_seconds")
-    block_sum = round(sum(b["seconds"] for b in clip.get("blocks") or []), 2)
+    blocks = clip.get("blocks") or []
+    block_sum = round(sum(b["seconds"] for b in blocks), 2)
     if declared is None:
         errors.append(f"클립 {cid}: 클립 길이 선언(─ 클립 … ─)이 없어요 — 콘티가 v3.1 클립 "
                       f"마커 형식이 아닐 수 있어요.")
@@ -206,8 +304,20 @@ def validate_clip(clip: dict) -> list[str]:
         if abs(block_sum - declared) > _TIME_TOLERANCE:
             errors.append(f"클립 {cid}: 블록 합({block_sum}초)이 선언된 클립 길이"
                           f"({declared}초)와 안 맞아요.")
-    if not clip.get("blocks"):
+    if not blocks:
         errors.append(f"클립 {cid}: 블록([N초] …)이 하나도 없어요.")
+
+    prev_header = None
+    for i, b in enumerate(blocks):
+        header = b.get("header")
+        for msg in validate_composition_header(header):
+            errors.append(f"클립 {cid} 블록 {i + 1}: {msg}")
+        # "블록을 나누는 유일한 사유는 구도 변화다" — 인접 블록 구도 헤더가 완전히 같으면
+        # 나눌 이유가 없었다는 뜻(규칙 1 위반).
+        if header and prev_header and header == prev_header:
+            errors.append(f"클립 {cid} 블록 {i + 1}: 구도 헤더가 직전 블록과 완전히 같아요"
+                          f"('{header}') — 구도 변화 없이 블록을 나누면 안 돼요.")
+        prev_header = header or prev_header
     return errors
 
 
