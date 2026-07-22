@@ -969,7 +969,7 @@ function pollCutVideoJob(jobId, sceneNum, cutNum) {
   const finish = async (msg) => {
     videoizingCuts.delete(cutKey(sceneNum, cutNum));
     try { await loadStudio(studioProjectId); } catch (e) { /* 무시 */ }
-    renderStillsPage();
+    renderStills(); // ★낡은 stillsCuts가 아니라 새로 불러온 화 데이터로 다시 만든다(영상 반영)
     if (msg) alert(msg);
   };
   const check = async () => {
