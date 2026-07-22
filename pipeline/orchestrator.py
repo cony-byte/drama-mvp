@@ -1106,39 +1106,34 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
         except Exception:
             pass
 
-        # ★2026-07-22(사용자 지시): 스틸은 '컷(블록)' 단위로, 영상은 '클립(블록 묶음)' 단위로.
-        # → 스틸을 클립당 1장이 아니라 블록(구도 컷)마다 1장 만든다. cut_num은 씬 전체 순번(1..N),
-        # clip_id는 소속 클립(영상화가 클립 단위로 묶이게). 생성 단계에 컷 진행(3/5)을 노출.
+        # ★2026-07-22(사용자 지시 — 스틸 확 줄이기): 미리보기 스틸은 '클립당 대표 1장'만 만든다
+        # (컷=블록마다 만들면 씬당 10~15장·순차라 너무 느림). 클립 대표 블록을 앵커 스틸로.
+        # 컷별 상세 스틸은 필요 시 영상 제작 단계에서만. 생성 단계에 진행(2/5)을 노출.
         stills = []
         prev_still = None
-        total_cuts = sum(len(c.get("blocks") or []) for c in (scene.get("clips") or []))
-        cut_idx = 0
-        for clip in scene.get("clips") or []:
+        clips = scene.get("clips") or []
+        for ci, clip in enumerate(clips, 1):
             clip_id = clip.get("clip_id")
-            rep = v3_schema.representative_block(clip)
-            for bi, block in enumerate(clip.get("blocks") or []):
-                cut_idx += 1
-                jobs.update(job_id, stage=f"씬{scene_num} 컷 {cut_idx}/{total_cuts} 스틸 생성 중")
-                try:
-                    png, _cost = generate_clip_still(scene, clip, work=work, block=block,
-                                                     continuity_png=prev_still, characters=characters)
-                except Exception:
-                    continue  # 이 컷 스틸 실패 — 건너뛰고 다음 컷
-                prev_still = png
-                try:
-                    vp_store.save_still(work, scene_num=scene_num,
-                                        prompt_summary=clip.get("label", ""), png=png,
-                                        episode=num, clip_id=f"{clip_id}-{bi + 1}")
-                except Exception:
-                    pass
-                stills.append({
-                    "scene_num": scene_num, "cut_num": cut_idx, "clip_id": clip_id,
-                    "block_index": bi, "caption": (block.get("description") or clip.get("label") or ""),
-                    "image": oi.png_data_url(png), "video_path": None,
-                    "representative": block is rep,  # 이 클립 영상의 시작 프레임 후보
-                })
-                # 생성되는 스틸을 하나씩 노출(이전 씬 + 이번 씬 진행분).
-                jobs.update(job_id, stills=_v3_all_stills(v3map) + stills)
+            jobs.update(job_id, stage=f"씬{scene_num} 컷 {ci}/{len(clips)} 스틸 생성 중")
+            try:
+                png, _cost = generate_clip_still(scene, clip, work=work,
+                                                 continuity_png=prev_still, characters=characters)
+            except Exception:
+                continue  # 이 컷 스틸 실패 — 건너뛰고 다음 컷
+            prev_still = png
+            try:
+                vp_store.save_still(work, scene_num=scene_num,
+                                    prompt_summary=clip.get("label", ""), png=png,
+                                    episode=num, clip_id=clip_id)
+            except Exception:
+                pass
+            stills.append({
+                "scene_num": scene_num, "cut_num": ci, "clip_id": clip_id,
+                "caption": clip.get("label", ""), "image": oi.png_data_url(png),
+                "video_path": None, "representative": True,
+            })
+            # 생성되는 스틸을 하나씩 노출(이전 씬 + 이번 씬 진행분).
+            jobs.update(job_id, stills=_v3_all_stills(v3map) + stills)
 
         v3map[scene_num] = {
             "scene_num": scene_num, "state": "stills_ready", "conti_text": conti_text,
