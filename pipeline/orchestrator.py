@@ -1106,34 +1106,38 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
         except Exception:
             pass
 
-        # ★2026-07-22(사용자 지시 — 스틸 확 줄이기): 미리보기 스틸은 '클립당 대표 1장'만 만든다
-        # (컷=블록마다 만들면 씬당 10~15장·순차라 너무 느림). 클립 대표 블록을 앵커 스틸로.
-        # 컷별 상세 스틸은 필요 시 영상 제작 단계에서만. 생성 단계에 진행(2/5)을 노출.
-        stills = []
-        prev_still = None
+        # ★2026-07-22: 미리보기 스틸 = 클립당 대표 1장. co-writer-bot 병렬 구조 이식 — 클립들을
+        # ThreadPoolExecutor(OPENROUTER_IMG_WORKERS)로 '독립 그룹 병렬' 생성한다(클립당 1장이라
+        # 그룹 내 체이닝 없음). 인물·의상·장소는 등록 참조로 고정돼 병렬이어도 정체성은 유지되고,
+        # 잃는 건 클립 간 톤 연속성뿐(연속성 체이닝 제거 = 병렬의 대가). 완성 컷부터 하나씩 노출.
         clips = scene.get("clips") or []
-        for ci, clip in enumerate(clips, 1):
-            clip_id = clip.get("clip_id")
-            jobs.update(job_id, stage=f"씬{scene_num} 컷 {ci}/{len(clips)} 스틸 생성 중")
+        prev_v3 = _v3_all_stills(v3map)  # 이전 씬들 스틸(이번 씬은 아래서 채움)
+        results: list = [None] * len(clips)
+        _slock = threading.Lock()
+        jobs.update(job_id, stage=f"씬{scene_num} 스틸 {len(clips)}컷 생성 중(병렬)")
+
+        def _one_clip(ci_clip):
+            ci, clip = ci_clip
             try:
-                png, _cost = generate_clip_still(scene, clip, work=work,
-                                                 continuity_png=prev_still, characters=characters)
+                png, _cost = generate_clip_still(scene, clip, work=work, characters=characters)
             except Exception:
-                continue  # 이 컷 스틸 실패 — 건너뛰고 다음 컷
-            prev_still = png
+                return
+            clip_id = clip.get("clip_id")
             try:
-                vp_store.save_still(work, scene_num=scene_num,
-                                    prompt_summary=clip.get("label", ""), png=png,
-                                    episode=num, clip_id=clip_id)
+                vp_store.save_still(work, scene_num=scene_num, prompt_summary=clip.get("label", ""),
+                                    png=png, episode=num, clip_id=clip_id)
             except Exception:
                 pass
-            stills.append({
-                "scene_num": scene_num, "cut_num": ci, "clip_id": clip_id,
-                "caption": clip.get("label", ""), "image": oi.png_data_url(png),
-                "video_path": None, "representative": True,
-            })
-            # 생성되는 스틸을 하나씩 노출(이전 씬 + 이번 씬 진행분).
-            jobs.update(job_id, stills=_v3_all_stills(v3map) + stills)
+            rec = {"scene_num": scene_num, "cut_num": ci + 1, "clip_id": clip_id,
+                   "caption": clip.get("label", ""), "image": oi.png_data_url(png),
+                   "video_path": None, "representative": True}
+            with _slock:
+                results[ci] = rec
+                jobs.update(job_id, stills=prev_v3 + [r for r in results if r])  # 완성분부터 노출
+        workers = max(1, min(sb_config.OPENROUTER_IMG_WORKERS, len(clips) or 1))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as _ex:
+            list(_ex.map(_one_clip, list(enumerate(clips))))
+        stills = [r for r in results if r]
 
         v3map[scene_num] = {
             "scene_num": scene_num, "state": "stills_ready", "conti_text": conti_text,
