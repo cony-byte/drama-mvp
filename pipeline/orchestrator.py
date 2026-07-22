@@ -1746,6 +1746,35 @@ def _trim_head_0_1s(path: str, seconds: float = 0.1, timeout: int = 60) -> bool:
 
 # image-to-video 안전필터가 "실존 인물"로 오판할 때, 컷 이미지를 명백한 2D 일러스트/애니 화풍으로
 # 다시 그려 재시도한다 — 포토리얼 얼굴을 빼면 필터가 통과한다(데모 우선; 그 컷만 화풍이 달라짐).
+# ★2026-07-22: co-writer-bot(정답 레퍼런스)의 영상 잠금 블록 이식 — image-to-video가 스틸을
+# 무시하고 인물(얼굴·머리·옷)·프레이밍을 제멋대로 바꾸는(드리프트) 사고를 막는다. 모든 영상 모션
+# 프롬프트 맨 앞에 붙여, 첨부한 스틸을 "정확히 유지할 첫 프레임"으로 못박고 카메라·화풍을 고정한다.
+_VIDEO_FICTION_LOCK = (
+    "An entirely fictional adult character, created for an original fictional drama. "
+    "The character is not based on, associated with, or intended to resemble any real person, "
+    "celebrity, public figure, or private individual. Realistic cinematic look (~80% realism, "
+    "clean photographic rendering, not illustration/cartoon/anime), a clearly fictional digital "
+    "character. ")
+_VIDEO_REF_LOCK = (
+    "The provided reference image is the exact first frame of this video — do not change the "
+    "character's face, hair color/style, clothing, or background/setting shown in that reference "
+    "image. Only animate the motion described below; every visual element not explicitly described "
+    "as changing must stay identical to the reference image throughout the video. ")
+_VIDEO_CAMERA_LOCK = (
+    "Keep the camera static/locked in place by default — do not push in, zoom, dolly, or pan "
+    "unless the shot description below explicitly calls for camera movement. Maintain the exact "
+    "framing/shot size (e.g., medium shot stays medium shot) from the first frame throughout — "
+    "do not drift into a closer shot on your own. ")
+_VIDEO_STYLE_LOCK = (
+    "Semi-realistic cinematic K-drama style, ~80% realism (photoreal lighting/proportion/depth "
+    "with a subtly painterly finish, not a flat cartoon/anime, not a pure photograph). ")
+
+
+def _video_lock_prefix() -> str:
+    """모든 영상 모션 프롬프트 앞에 붙는 잠금 블록(가상인물→ref→카메라→화풍 순)."""
+    return _VIDEO_FICTION_LOCK + _VIDEO_REF_LOCK + _VIDEO_CAMERA_LOCK + _VIDEO_STYLE_LOCK
+
+
 def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
                            motion_prompt: str, episode: int = 1, shot: dict | None = None,
                            clip_id: str | None = None) -> str:
@@ -1767,9 +1796,10 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
     def _is_filter(e):
         return "InputImageSensitiveContentDetected" in str(e)
 
+    locked_prompt = _video_lock_prefix() + motion_prompt
     grid_used = False
     try:
-        url, cost = _gen_once(png, motion_prompt)
+        url, cost = _gen_once(png, locked_prompt)
     except Exception as e:
         if not _is_filter(e):
             raise
@@ -1778,7 +1808,7 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
             f"<<<{anchor_name}>>> is the clean approved start frame and must remain the exact "
             f"identity, costume, location, lighting, and screen-direction anchor.\n")
         try:
-            url, cost = _gen_once(_facegrid_overlay(png), grid_anchor + motion_prompt)
+            url, cost = _gen_once(_facegrid_overlay(png), grid_anchor + locked_prompt)
         except Exception as e2:
             if _is_filter(e2):
                 raise RuntimeError(
