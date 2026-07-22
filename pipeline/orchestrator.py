@@ -992,6 +992,8 @@ def produce_episode_v3(work: str, script: str, skeleton_scenes: list[tuple[int, 
                 on_progress(scene_num, None, "상세 콘티 작성 중")
             scene, conti_text, errors = build_scene_blocks(
                 skeleton_text, script, prior_handoff=handoff, characters=characters, work=work)
+            if not errors and scene:
+                _save_conti_for_review(work, episode, scene_num, conti_text)  # 검수용 텍스트 파일
         if errors or not scene:
             results.append({"scene_num": scene_num, "state": "failed", "errors": errors})
             break  # 연속성 유지 위해 이 씬에서 멈춤
@@ -1098,6 +1100,7 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
             characters=characters, work=work)
         if errors or not scene:
             raise RuntimeError(f"씬{scene_num} 콘티 검증 실패: " + " / ".join(errors or ["파싱 실패"]))
+        _save_conti_for_review(work, num, scene_num, conti_text)  # 검수용 텍스트 파일로 남김
 
         jobs.update(job_id, stage=f"씬{scene_num} 배경·의상 준비 중")
         try:
@@ -2248,6 +2251,20 @@ def regenerate_cut_still(project: dict, episode: dict, scene_num: int, cut_num: 
         shot, work=work, continuity_refs=continuity_refs)
     return {"scene_num": scene_num, "cut_num": cut_num, "caption": shot.get("caption", ""),
             "prompt": shot.get("prompt", ""), "image": oi.png_data_url(png), "video_path": None}
+
+
+def _save_conti_for_review(work: str, episode: int, scene_num: int, conti_text: str) -> None:
+    """생성된 씬 상세 콘티를 검수용 텍스트 파일로 남긴다(★2026-07-22 사용자 요청 — 콘티 검수).
+    위치: outputs/<작품>/<N>화/상세콘티/씬N.txt. 실패해도 파이프라인은 계속(검수용 부가 파일)."""
+    try:
+        root = vp_store.out_root(work)
+        if not root or not conti_text:
+            return
+        d = root / f"{episode}화" / "상세콘티"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"씬{scene_num}.txt").write_text(conti_text, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _find_v3_scene_clip(episode: dict, scene_num: int, clip_id: str):
