@@ -275,6 +275,28 @@ def generate_character_portrait(character: dict) -> bytes:
     return png
 
 
+def _make_face_reference(png: bytes, character: dict) -> bytes | None:
+    """캐릭터 카드의 원본 이미지(png)에서 '얼굴 전용 레퍼런스'를 img2img로 만든다 — 원본 인물의
+    얼굴·헤어 정체성은 최대한 보존하되 정면·얼굴~어깨 크롭·중립 무지 상의·액세서리 제거·흰 배경
+    으로 중립화(★2026-07-22 사용자 요청). 실패하면 None(호출부가 원본으로 폴백)."""
+    try:
+        face_appearance = _face_appearance((character.get("appearance") or "").strip())
+        appearance_clause = (f" Keep this face/hair identity: {face_appearance}."
+                            if face_appearance else "")
+        prompt = (
+            "Redraw the exact same person from the attached reference image as a clean identity "
+            "headshot. Preserve their facial identity, facial features, proportions, skin tone, and "
+            f"hairstyle from the reference as closely as possible — same face, same hair.{appearance_clause} "
+            "Do NOT copy the clothing, accessories, pose, or background from the reference; replace "
+            "them per the framing rules. Do NOT use a full-body or strong-costume framing. "
+            + FACE_REF_FRAMING + " " + PORTRAIT_STYLE)
+        out, _cost = _with_retry(oi.generate, prompt, aspect_ratio="2:3",
+                                refs=[oi.png_data_url(png)])
+        return out
+    except Exception:
+        return None
+
+
 def _characters_bible_for_tone(characters: list[dict] | None) -> dict:
     """char_add_system이 참고할 "기존 등장인물" 블록용 — 톤·관계 참고 목적이라 이름+주요 필드만."""
     chars = {}

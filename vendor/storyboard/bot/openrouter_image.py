@@ -323,24 +323,29 @@ def element_has_image(work: str | None, e: dict) -> bool:
     return bool(p and p.exists())
 
 
-def save_element_image(work: str, element: dict, png: bytes, ext: str = "png") -> None:
+def save_element_image(work: str, element: dict, png: bytes, ext: str = "png",
+                       variant: str | None = None) -> None:
     """요소 참조 이미지를 refs/<작품>/<타입폴더>/<요소ID>.<ext>에 저장하고 ext를 레지스트리에 기록.
-    element은 register_element가 돌려준(=id를 가진) dict여야 한다."""
+    element은 register_element가 돌려준(=id를 가진) dict여야 한다.
+    variant를 주면 <요소ID>_<variant>.<ext>로 저장한다(예: 인물 '원본' — 같은 요소 id로 대표
+    이미지와 함께 관리). variant 이미지는 ext 레지스트리 기록 대상이 아니다(대표만 기록)."""
     eid = element.get("id")
     if not eid:
         return
     with _ELEMENTS_LOCK:
-        p = _element_file_path(work, {**element, "ext": ext})
-        if not p:
+        base = _element_file_path(work, {**element, "ext": ext})
+        if not base:
             return
+        p = base if not variant else base.with_name(f"{eid}_{variant}.{ext}")
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(png)
-        elems = load_elements(work)
-        for e in elems:
-            if e.get("id") == eid:
-                e["ext"] = ext
-                break
-        _save_elements(work, elems)
+        if variant is None:
+            elems = load_elements(work)
+            for e in elems:
+                if e.get("id") == eid:
+                    e["ext"] = ext
+                    break
+            _save_elements(work, elems)
 
 
 def load_elements(work: str | None) -> list[dict]:

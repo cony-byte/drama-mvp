@@ -14,7 +14,7 @@ from pathlib import Path
 import vendor.storyboard.bot.openrouter_image as oi
 
 from pipeline import project_setup
-from pipeline.orchestrator import generate_character_portrait, generate_synopsis
+from pipeline.orchestrator import generate_character_portrait, generate_synopsis, _make_face_reference
 
 _LOCK = threading.Lock()
 _PROJECTS: dict[str, dict] = {}
@@ -175,10 +175,14 @@ def _save_character_reference(work: str, character: dict) -> None:
         return
     name = character.get("name") or "인물"
     b64 = image.split(",", 1)[1]
-    png = base64.b64decode(b64)
-    # ★2026-07-22(refs 재설계): 인물을 person으로 등록(id 획득) → refs/<작품>/인물/<id>.png 저장.
+    original_png = base64.b64decode(b64)
+    # ★2026-07-22: 인물을 person으로 등록(id 획득). 카드 원본 이미지는 <id>_원본.png로 보관하고,
+    # 그 원본에서 '얼굴 전용 레퍼런스'(정면·얼굴~어깨 크롭·중립 상의·액세서리 제거·흰 배경)를
+    # 만들어 대표 <id>.png로 쓴다(같은 요소 id로 원본↔얼굴레퍼런스 매칭). 중립화 실패 시 원본 폴백.
     elem = oi.register_element(work, name, etype="person", aliases=[name])
-    oi.save_element_image(work, elem, png)
+    oi.save_element_image(work, elem, original_png, variant="원본")
+    face_png = _make_face_reference(original_png, character) or original_png
+    oi.save_element_image(work, elem, face_png)
     gender_en = _GENDER_EN.get((character.get("gender") or "").strip())
     if gender_en:
         with oi._ELEMENTS_LOCK:
