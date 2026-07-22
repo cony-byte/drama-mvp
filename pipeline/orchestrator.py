@@ -1468,79 +1468,57 @@ def generate_image_for_shot(shot: dict, work: str | None = None,
     return _with_retry(oi.generate, prompt, aspect_ratio="9:16", refs=refs)
 
 
-_ANIME_CASCADE = os.path.join(os.path.dirname(__file__), "lbpcascade_animeface.xml")
+_YOLO_WEIGHTS = os.path.join(os.path.dirname(__file__), "models", "yolov8n.pt")
+_FACE_HEIGHT_RATIO = 0.30  # 사람 박스 높이 중 상단 몇 %를 "얼굴 영역"으로 근사해서 덮을지
+_FACE_PAD_X, _FACE_PAD_Y = 0.05, 0.05
+_PERSON_CLASS = 0
+_PERSON_CONF_THRESHOLD = 0.4
+
+_YOLO_MODEL = None
 
 
-def _iou(a, b) -> float:
-    ax0, ay0, aw, ah = a; bx0, by0, bw, bh = b
-    ax1, ay1, bx1, by1 = ax0 + aw, ay0 + ah, bx0 + bw, by0 + bh
-    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
-    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
-    iw, ih = max(0, ix1 - ix0), max(0, iy1 - iy0)
-    inter = iw * ih
-    if inter == 0:
-        return 0.0
-    union = aw * ah + bw * bh - inter
-    return inter / union if union else 0.0
-
-
-def _merge_boxes(boxes: list[tuple[int, int, int, int]], iou_thresh: float = 0.3) -> list[tuple[int, int, int, int]]:
-    """서로 많이 겹치는 박스(같은 얼굴을 여러 캐스케이드가 중복 감지)만 하나로 합친다."""
-    merged: list[tuple[int, int, int, int]] = []
-    for b in boxes:
-        hit = next((i for i, m in enumerate(merged) if _iou(m, b) > iou_thresh), None)
-        if hit is None:
-            merged.append(b)
-        else:
-            mx0, my0, mw, mh = merged[hit]
-            bx0, by0, bw, bh = b
-            x0, y0 = min(mx0, bx0), min(my0, by0)
-            x1, y1 = max(mx0 + mw, bx0 + bw), max(my0 + mh, by0 + bh)
-            merged[hit] = (x0, y0, x1 - x0, y1 - y0)
-    return merged
+def _yolo_model():
+    global _YOLO_MODEL
+    if _YOLO_MODEL is None:
+        from ultralytics import YOLO
+        _YOLO_MODEL = YOLO(_YOLO_WEIGHTS)
+    return _YOLO_MODEL
 
 
 def _detect_face_boxes(png: bytes, W: int, H: int) -> list[tuple[int, int, int, int]]:
-    """cv2로 화면에 보이는 얼굴 전부를 (x,y,w,h) 리스트로 감지. 애니풍 → 실사(정면+측면 양방향)
-    순으로 시도하고, 못 찾거나 cv2가 없으면 상단 중앙 휴리스틱 박스 하나로 폴백한다(세로 컷은
-    얼굴이 보통 위쪽). 2인 이상 등장 컷에서 얼굴 하나만 가리면 남은 얼굴 때문에 안전필터가
-    여전히 걸리므로 감지된 얼굴 전부를 반환한다(2026-07-21, 실측 — 2인 컷에서 격자 재시도도
-    필터에 걸림).
-    ★2026-07-21: 정면 캐스케이드만으로는 반측면·측면으로 돌아선 얼굴을 놓친다(실측 — 2인 컷에서
-    한쪽 인물이 반측면이라 얼굴 감지가 안 돼 격자가 안 씌워짐 → 필터 재발). haarcascade_profileface
-    (왼쪽 측면 기준으로 학습됨)를 원본 + 좌우반전 이미지 양쪽에 돌려 오른쪽/왼쪽 측면 얼굴을 모두
-    잡고, 정면 결과와 합친다(같은 얼굴 중복 검출은 IoU 병합으로 정리)."""
+    """화면에 등장하는 사람마다(다중 인물 지원) 얼굴 영역을 (x,y,w,h) 리스트로 근사 반환.
+    2인 이상 등장 컷에서 얼굴 하나만 가리면 남은 얼굴 때문에 안전필터가 여전히 걸리므로
+    감지된 사람 전부를 반환한다(2026-07-21, 실측 — 2인 컷에서 격자 재시도도 필터에 걸림).
+
+    ★2026-07-22: 기존엔 cv2 Haar cascade(애니풍→실사 정면+측면)로 "얼굴"을 직접 찾았는데,
+    실측 검증(다중 인물 스틸컷으로 직접 영상화 API 호출)에서 옆모습·조명이 있는 실제 프로덕션
+    스틸컷의 한쪽 인물을 계속 놓치는 게 확인됨(반측면 얼굴을 캐스케이드가 못 잡음) — 그 상태로는
+    격자/박스를 씌워도 놓친 얼굴이 그대로 노출돼 필터를 못 피함. YOLOv8(person 클래스)로
+    교체해 사람 전신 박스를 훨씬 안정적으로 잡고(포즈/각도에 덜 민감), 그 박스 상단 일부를
+    얼굴 영역으로 근사해 덮는 방식으로 바꿈 — co-writer-bot/storyboard-bot과 동일 로직(같은
+    테스트 이미지로 재검증해 안전필터를 통과함을 확인함)."""
     try:
         import cv2
         import numpy as np
         arr = np.frombuffer(png, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is not None:
-            gray = cv2.equalizeHist(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
-            min_size = (int(W * 0.08), int(W * 0.08))
-            cands = []
-            if os.path.exists(_ANIME_CASCADE):
-                cands = list(cv2.CascadeClassifier(_ANIME_CASCADE).detectMultiScale(
-                    gray, 1.1, 5, minSize=min_size))
-            if len(cands) == 0:
-                frontal = cv2.CascadeClassifier(
-                    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-                ).detectMultiScale(gray, 1.1, 4, minSize=min_size)
-                cands.extend(frontal)
-                profile_clf = cv2.CascadeClassifier(
-                    cv2.data.haarcascades + "haarcascade_profileface.xml")
-                cands.extend(profile_clf.detectMultiScale(gray, 1.1, 4, minSize=min_size))
-                flipped = cv2.flip(gray, 1)
-                for x, y, w, h in profile_clf.detectMultiScale(flipped, 1.1, 4, minSize=min_size):
-                    cands.append((W - x - w, y, w, h))  # 좌우반전 좌표를 원본 좌표로 복원
-            if len(cands) > 0:
-                boxes = []
-                for x, y, w, h in cands:
-                    px, py = int(w * 0.03), int(h * 0.03)
-                    x0 = max(0, x - px); y0 = max(0, y - py)
-                    x1 = min(W, x + w + px); y1 = min(H, y + h + py)
-                    boxes.append((x0, y0, x1 - x0, y1 - y0))
-                return _merge_boxes(boxes)
+            res = _yolo_model()(img, verbose=False)[0]
+            boxes = []
+            for b in res.boxes:
+                if int(b.cls) != _PERSON_CLASS or float(b.conf) < _PERSON_CONF_THRESHOLD:
+                    continue
+                x1, y1, x2, y2 = b.xyxy[0].tolist()
+                h = y2 - y1
+                fy0 = y1 - h * _FACE_PAD_Y
+                fy1 = y1 + h * _FACE_HEIGHT_RATIO
+                w = x2 - x1
+                px = w * _FACE_PAD_X
+                x0 = max(0.0, x1 - px); x1p = min(float(W), x2 + px)
+                y0 = max(0.0, fy0); y1p = min(float(H), fy1)
+                boxes.append((int(x0), int(y0), int(x1p - x0), int(y1p - y0)))
+            if boxes:
+                return boxes
     except Exception:
         pass
     # 폴백: 상단 중앙 박스 하나
@@ -1548,26 +1526,21 @@ def _detect_face_boxes(png: bytes, W: int, H: int) -> list[tuple[int, int, int, 
     return [((W - w) // 2, int(H * 0.10), w, h)]
 
 
-_GRID_CELLS = 5  # ★2026-07-21: 사용자 요청 — 3×3에서 5×5로(선이 더 촘촘해져 얼굴 가림 강도↑)
-
-
 def _facegrid_overlay(png: bytes) -> bytes:
     """image-to-video의 실존인물 안전필터(InputImageSensitiveContentDetected)를 회피하려고
-    화면에 보이는 얼굴 전부에 빨간 5×5 격자를 얹는다(2인 이상 등장 컷에서 하나만 가리면 남은
-    얼굴 때문에 필터가 여전히 걸림 — 2026-07-21 실측). cv2로 얼굴을 자동 감지(애니풍→실사정면→
-    상단중앙 폴백)해 그 위에 격자를 그린다 — 필터는 얼굴이 가려지면 통과한다."""
+    화면에 등장하는 사람 전부의 얼굴 영역에 빨간 불투명 박스를 얹는다(2인 이상 등장 컷에서
+    하나만 가리면 남은 얼굴 때문에 필터가 여전히 걸림 — 2026-07-21 실측).
+
+    ★2026-07-22: 격자 "선"만으로는 얼굴 대부분이 그대로 노출돼 필터를 못 피하는 게 실측으로
+    확인됨(같은 이미지를 완전 불투명 박스로 덮으니 통과) — 그래서 격자선 대신 감지 영역을
+    완전히 채운다(함수명은 호출부 호환을 위해 유지)."""
     from PIL import Image, ImageDraw
     base = Image.open(io.BytesIO(png)).convert("RGBA")
     W, H = base.size
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
     for x, y, w, h in _detect_face_boxes(png, W, H):
-        x0, y0, x1, y1 = x, y, x + w, y + h
-        for i in range(_GRID_CELLS + 1):
-            gx = round(x0 + (x1 - x0) * i / _GRID_CELLS)
-            d.line([(gx, y0), (gx, y1)], fill=(237, 28, 36, 255), width=max(2, W // 200))
-            gy = round(y0 + (y1 - y0) * i / _GRID_CELLS)
-            d.line([(x0, gy), (x1, gy)], fill=(237, 28, 36, 255), width=max(2, W // 200))
+        d.rectangle([x, y, x + w, y + h], fill=(237, 28, 36, 255))
     out = io.BytesIO()
     Image.alpha_composite(base, overlay).convert("RGB").save(out, format="PNG")
     return out.getvalue()

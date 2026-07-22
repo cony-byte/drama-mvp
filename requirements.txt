@@ -6,3 +6,4 @@ anthropic>=0.92.0
 Pillow>=10.0.0
 opencv-python-headless>=4.8,<5
 numpy>=1.24
+ultralytics>=8.0          # pipeline/orchestrator.py facegrid 사람 감지(YOLOv8n, 안전필터 자동 대응) — 가중치는 pipeline/models/yolov8n.pt
