@@ -972,7 +972,8 @@ def produce_episode_v3(work: str, script: str, skeleton_scenes: list[tuple[int, 
                 _, hdr, body = parsed[0]
                 scene = v3_schema.parse_scene(hdr, body)
                 conti_text = preview["conti_text"]
-                errors = v3_schema.validate_scene(scene)
+                errors = []  # ★2026-07-22: 검증 제거(build_scene_blocks와 일관) — 미리보기 콘티를
+                # 재검증해 실패로 break하면 한 클립도 영상화 안 돼 "영상 클립 없다"가 뜨던 버그.
                 for s in preview.get("stills") or []:
                     if s.get("clip_id") and s.get("image"):
                         try:
