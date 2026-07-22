@@ -724,4 +724,15 @@ def get_video(job_id: str):
 
 
 # 로컬에서 프론트까지 한 번에 확인하고 싶을 때용(배포 시엔 GitHub Pages/Vercel이 이 폴더를 대신 서빙).
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+class _NoCacheStaticFiles(StaticFiles):
+    """★2026-07-22: 기본 StaticFiles 응답엔 Cache-Control이 없어서, ETag/Last-Modified만으로
+    브라우저가 재검증(304) 없이 그냥 디스크/메모리 캐시를 그대로 써버리는 경우가 실측으로
+    확인됨(app.js를 고쳐도 새로고침해도 반영 안 되는 문제) — 매 응답에 no-cache를 강제해 항상
+    서버에 재검증하게 한다(ETag가 같으면 304라 실제 전송 비용은 거의 없음)."""
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/", _NoCacheStaticFiles(directory="static", html=True), name="static")
