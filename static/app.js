@@ -10,6 +10,28 @@ function setApiBase(v) {
   localStorage.setItem(API_BASE_KEY, v.trim());
 }
 
+// 마지막으로 연 작품/화를 기억해뒀다가 새로고침해도 그 자리로 돌아간다.
+// ★2026-07-22: "AI 생성으로 고친 대본은 저장이 안 된다"는 리포트의 실제 원인 — 서버 저장 자체는
+// 정상이었지만, 새로고침하면 항상 첫 화면(아이디어 입력)으로 돌아가고 "내 작품" 목록엔 제목이
+// 같은 데모 카드가 여러 장 있어서, 사용자가 방금 고친 그 프로젝트가 아니라 다른(옛) 카드를 다시
+// 열어 "안 고쳐진 대본"을 보게 됐다 — 실제로는 되돌아간 게 아니라 다른 프로젝트를 연 것.
+const LAST_OPEN_KEY = "drama_mvp_last_open";
+
+function saveLastOpen(projectId, episodeNum) {
+  try {
+    if (!projectId) { localStorage.removeItem(LAST_OPEN_KEY); return; }
+    localStorage.setItem(LAST_OPEN_KEY, JSON.stringify({ projectId, episodeNum: episodeNum ?? null }));
+  } catch (e) { /* localStorage 불가 환경 — 조용히 무시 */ }
+}
+
+function loadLastOpen() {
+  try {
+    return JSON.parse(localStorage.getItem(LAST_OPEN_KEY) || "null");
+  } catch (e) {
+    return null;
+  }
+}
+
 const $ = (id) => document.getElementById(id);
 
 function escapeHtml(text) {
@@ -699,6 +721,7 @@ function renderEpisodeDetail() {
 
 function openEpisodeDetail(num) {
   currentEpisodeNum = num;
+  saveLastOpen(studioProjectId, num);
   // 편집 모드 초기화(다른 화 열 때 이전 편집 상태가 남지 않게)
   exitSubtitleEdit();
   exitSummaryEdit();
@@ -707,7 +730,10 @@ function openEpisodeDetail(num) {
   showView("episodeDetail");
 }
 
-$("closeEpisodeDetailBtn").addEventListener("click", () => showView("studio"));
+$("closeEpisodeDetailBtn").addEventListener("click", () => {
+  saveLastOpen(studioProjectId, null);
+  showView("studio");
+});
 
 function startJob(endpoint, mode, prepMsg, query) {
   const base = getApiBase();
@@ -1331,6 +1357,7 @@ $("goToStudioBtn").addEventListener("click", async () => {
     if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
     const { project_id } = await res.json();
     studioProjectId = project_id;
+    saveLastOpen(studioProjectId, null);
     await loadStudio(project_id);
     showView("studio");
   } catch (e) {
@@ -1429,6 +1456,7 @@ $("worksList").addEventListener("click", async (e) => {
   const card = e.target.closest(".work-card");
   if (!card) return;
   studioProjectId = card.dataset.id;
+  saveLastOpen(studioProjectId, null);
   await loadStudio(studioProjectId);
   showView("studio");
 });
@@ -1447,6 +1475,7 @@ $("newWorkBtn").addEventListener("click", async () => {
     if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
     const { project_id } = await res.json();
     studioProjectId = project_id;
+    saveLastOpen(studioProjectId, null);
     await loadStudio(project_id);
     showView("studio");
   } catch (e) {
@@ -1509,3 +1538,24 @@ $("publishVideoBtn").addEventListener("click", async () => {
     btn.disabled = false;
   }
 });
+
+// 새로고침 시 마지막으로 연 작품(+화)으로 자동 복귀. 실패하면(삭제된 프로젝트 등) 기록을 지우고
+// 기본 화면(아이디어 입력)에 그대로 둔다 — 조용히 무시, 에러 화면으로 몰지 않는다.
+(async function restoreLastOpen() {
+  const last = loadLastOpen();
+  if (!last || !last.projectId) return;
+  try {
+    studioProjectId = last.projectId;
+    await loadStudio(studioProjectId);
+    const hasEpisode = last.episodeNum != null &&
+      (currentStudioProject.episodes || []).some((e) => e.num === last.episodeNum);
+    if (hasEpisode) {
+      openEpisodeDetail(last.episodeNum);
+    } else {
+      showView("studio");
+    }
+  } catch (e) {
+    studioProjectId = null;
+    saveLastOpen(null);
+  }
+})();
