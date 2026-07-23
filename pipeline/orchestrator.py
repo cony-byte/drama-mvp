@@ -785,7 +785,7 @@ def ensure_scene_costumes(work: str, scene: dict, characters: list[dict] | None 
                 except Exception:
                     pass
             prompt = _element_ref_prompt(label, "costume", mood=mood, context=design)
-            png, _cost = _with_retry(oi.generate, prompt, size="832x832", refs=[])
+            png, _cost = _with_retry(oi.generate, prompt, size="832x832", refs=[], retries=3)
             _register_element_image(work, label, "costume", png)
             c["costume"] = label
             designed += 1
@@ -1654,10 +1654,14 @@ def fix_element_references(work: str, mood: str = "", conti_full: str = "",
             # 요소 참조 이미지는 스틸컷보다 작아도 되는데 기존 1:1 매핑(1024x1024)이 오히려
             # 스틸(720x1280, 92만px)보다 컸다(105만px) — gpt-image가 실제로 허용하는 최소
             # 픽셀 예산 근처인 832x832(16의 배수, 실측 확인)로 낮춰 생성 속도·비용을 줄인다.
-            png, _cost = _with_retry(oi.generate, prompt, size="832x832", refs=[])
+            png, _cost = _with_retry(oi.generate, prompt, size="832x832", refs=[], retries=3)
             _register_element_image(work, name, etype, png)
             return True
-        except Exception:
+        except Exception as e:
+            # ★2026-07-23: 요소/의상 참조 이미지는 image-to-video와 달리 안전필터 폴백이 없다.
+            # 일시적 400(safety_violations)이면 위 retries로 대개 넘어가지만, 끝내 실패하면
+            # 조용히 삼키지 말고 남긴다(그동안 흔적 없이 의상 이미지가 안 생겨 원인 추적이 어려웠음).
+            log.warning("요소 레퍼런스 이미지 생성 실패 (%s %s): %s", etype, name, e)
             return False
         finally:
             with _INFLIGHT_LOCK:
