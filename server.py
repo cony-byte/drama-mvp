@@ -28,7 +28,7 @@ def _load_dotenv(name: str = ".env") -> None:
 
 _load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -225,6 +225,30 @@ def studio_list(request: Request):
     return {"projects": studio.list_projects(_owner(request))}
 
 
+def _light_still(s: dict) -> dict:
+    """스틸의 image(base64, 컷당 최대 수MB)를 빼고 has_image만 남긴 새 dict.
+    새 dict를 만들어 반환할 뿐 원본은 건드리지 않는다(밑에서 in-place로 지우면
+    studio.get_project가 얕은 복사라 저장된 이미지가 영구 유실된다)."""
+    out = {k: v for k, v in s.items() if k != "image"}
+    out["has_image"] = bool(s.get("image"))
+    return out
+
+
+def _light_episode(ep: dict) -> dict:
+    """/api/studio/{project_id} 응답에서 씬 스틸 이미지를 빼고 가볍게 만든 화 사본.
+    스틸이 쌓인 프로젝트는 image 인라인 때문에 응답이 수백MB로 불어나 모바일에서
+    로딩이 멈추던 문제 — 이미지는 /cuts/{scene}/{cut}/image 로 따로 받게 한다."""
+    ep = dict(ep)
+    if ep.get("scene_stills"):
+        ep["scene_stills"] = [_light_still(s) for s in ep["scene_stills"]]
+    if ep.get("v3_scenes"):
+        ep["v3_scenes"] = [
+            {**v3, "stills": [_light_still(s) for s in (v3.get("stills") or [])]}
+            for v3 in ep["v3_scenes"]
+        ]
+    return ep
+
+
 @app.get("/api/studio/{project_id}")
 def studio_get(project_id: str):
     project = studio.get_project(project_id)
@@ -233,7 +257,25 @@ def studio_get(project_id: str):
     # 발행 영상의 로컬 파일 경로(내부 정보)는 프론트에 노출하지 않는다 — id로만 스트리밍.
     project["published"] = [{k: v for k, v in e.items() if k != "path"}
                             for e in project.get("published", [])]
+    project["episodes"] = [_light_episode(ep) for ep in project.get("episodes", [])]
     return project
+
+
+@app.get("/api/studio/{project_id}/episodes/{num}/cuts/{scene_num}/{cut_num}/image")
+def studio_get_cut_image(project_id: str, num: int, scene_num: int, cut_num: int):
+    """그 컷 스틸 이미지를 서빙 — studio_get 응답에서는 has_image만 내려주므로 프론트가
+    <img src>로 이 URL을 직접 가리켜 받는다(위 studio_get/_light_episode 참고)."""
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    still = next((s for s in (episode.get("scene_stills") or [])
+                 if s.get("scene_num") == scene_num and s.get("cut_num") == cut_num and s.get("image")),
+                None)
+    if not still:
+        raise HTTPException(404, "이 컷의 이미지가 없어요.")
+    image = still["image"]
+    b64 = image.split(",", 1)[1] if image.startswith("data:") else image
+    return Response(content=base64.b64decode(b64), media_type="image/png")
 
 
 @app.delete("/api/studio/{project_id}")

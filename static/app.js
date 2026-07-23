@@ -1035,7 +1035,7 @@ $("v3PreviewBtn").addEventListener("click", async () => {
   _setV3Buttons(true);
   // ★2026-07-22: 이미 만들어둔 스틸이 있으면 재생성하지 말고 그대로 띄운다(중복 생성·과부하 방지).
   // 다시 만들려면 스틸 뷰에서 컷을 지우고 "씬1부터 만들기"를 쓰면 된다.
-  if ((ep.scene_stills || []).some((s) => s.image)) {
+  if ((ep.scene_stills || []).some((s) => s.has_image || s.image)) {
     showView("stills");
     renderStills();
     return;
@@ -1114,13 +1114,22 @@ function cutVideoUrl(scene, cut) {
   return `${getApiBase()}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/cuts/${scene}/${cut}/video?t=${Date.now()}`;
 }
 
+// 그 컷의 스틸 이미지 URL — /api/studio/{id}에는 has_image만 오고(용량 때문에 image는 안 옴),
+// 실제 이미지는 이 엔드포인트로 따로 받는다.
+function cutImageUrl(scene, cut) {
+  return `${getApiBase()}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/cuts/${scene}/${cut}/image`;
+}
+
 function _stillCardEl(c) {
   const div = document.createElement("div");
   div.className = "still-card";
   div.dataset.scene = c.scene_num;
   div.dataset.cut = c.cut_num;
   // ★2026-07-23: per-컷 [영상화] 제거 — 영상화는 스틸 검수 후 [전체 영상화] 한 번으로만.
-  const media = c.image ? `<img src="${c.image}" alt="씬${c.scene_num} 컷${c.cut_num}">` : "";
+  // c.image: 생성 중 job 폴링(job.stills)에서 바로 오는 경우 — 그대로 사용.
+  // c.has_image: /api/studio/{id}에서 온 경우(용량 때문에 image는 안 오고 URL로 받음).
+  const src = c.image || (c.has_image ? cutImageUrl(c.scene_num, c.cut_num) : "");
+  const media = src ? `<img src="${src}" alt="씬${c.scene_num} 컷${c.cut_num}">` : "";
   div.innerHTML = `
     <div class="still-media">${media}</div>
     <div class="still-title">씬${c.scene_num} · 컷${c.cut_num}</div>
