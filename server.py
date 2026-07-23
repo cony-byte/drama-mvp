@@ -138,7 +138,8 @@ def chat_finalize(session_id: str, request: Request):
     card = generate_pitch_card(idea)
     pid = chat.get_project(session_id)
     if pid and studio.get_project(pid):
-        studio.update_project(pid, logline=card.get("logline", ""),
+        studio.update_project(pid, title=card.get("title", ""),
+                              logline=card.get("logline", ""),
                               characters=card.get("characters") or [],
                               key_scene=card.get("key_scene"))
     else:
