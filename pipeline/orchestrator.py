@@ -1692,21 +1692,32 @@ def _detect_face_boxes(png: bytes, W: int, H: int) -> list[tuple[int, int, int, 
     return [((W - w) // 2, int(H * 0.10), w, h)]
 
 
+_GRID_CELLS = 5  # 5×5
+
+
 def _facegrid_overlay(png: bytes) -> bytes:
     """image-to-video의 실존인물 안전필터(InputImageSensitiveContentDetected)를 회피하려고
-    화면에 등장하는 사람 전부의 얼굴 영역에 빨간 불투명 박스를 얹는다(2인 이상 등장 컷에서
-    하나만 가리면 남은 얼굴 때문에 필터가 여전히 걸림 — 2026-07-21 실측).
+    화면에 등장하는 사람 전부의 얼굴 영역에 빨간 5×5 격자 선을 얹는다(2인 이상 등장 컷에서
+    하나만 가리면 남은 얼굴 때문에 필터가 여전히 걸림 — 2026-07-21 실측). 얼굴 영역 자체는
+    YOLOv8(person 클래스, 다중 인물)로 안정적으로 감지한다.
 
-    ★2026-07-22: 격자 "선"만으로는 얼굴 대부분이 그대로 노출돼 필터를 못 피하는 게 실측으로
-    확인됨(같은 이미지를 완전 불투명 박스로 덮으니 통과) — 그래서 격자선 대신 감지 영역을
-    완전히 채운다(함수명은 호출부 호환을 위해 유지)."""
+    ★2026-07-22: 이전 실측에선 격자 선만으로 필터를 못 피해 완전 불투명 박스로 바꿨었는데
+    (그 실측: 같은 이미지를 완전 불투명 박스로 덮으니 통과), 사용자 지시로 다시 5×5 격자
+    선으로 되돌림 — 얼굴이 격자 선 사이로 부분적으로 노출되므로 불투명 박스보다 안전필터
+    회피 신뢰도가 낮을 수 있다(그 이전 실측 결과 참고)."""
     from PIL import Image, ImageDraw
     base = Image.open(io.BytesIO(png)).convert("RGBA")
     W, H = base.size
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
+    color = (237, 28, 36, 255)
     for x, y, w, h in _detect_face_boxes(png, W, H):
-        d.rectangle([x, y, x + w, y + h], fill=(237, 28, 36, 255))
+        x0, y0, x1, y1 = x, y, x + w, y + h
+        for i in range(_GRID_CELLS + 1):
+            gx = round(x0 + (x1 - x0) * i / _GRID_CELLS)
+            d.line([(gx, y0), (gx, y1)], fill=color, width=max(2, W // 200))
+            gy = round(y0 + (y1 - y0) * i / _GRID_CELLS)
+            d.line([(x0, gy), (x1, gy)], fill=color, width=max(2, W // 200))
     out = io.BytesIO()
     Image.alpha_composite(base, overlay).convert("RGB").save(out, format="PNG")
     return out.getvalue()
