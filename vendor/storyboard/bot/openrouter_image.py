@@ -537,6 +537,19 @@ def _has_time_suffix(s: str) -> bool:
     return bool(_TIME_SUFFIX_RE.search(s))
 
 
+# 대본 화자명에 붙는 대사/음성 큐 — (Na)내레이션, (V.O.), (E)효과음성, (off/O.S.)화면밖, (F)필터 등.
+# 이건 시간대(과거/현재)와 달리 "다른 인물"이 아니라 같은 인물의 발화 방식 표기이므로, 참조/음성
+# 매칭에서는 떼어내고 본명으로 취급한다(예: "강수정 (Na)" → "강수정").
+_VOICE_CUE_RE = re.compile(
+    r"\s*\(\s*(?:na|n|e|f|v\.?\s*o\.?|o\.?\s*s\.?|off|필터|전화|나레이션|내레이션|방백|소리|목소리)\s*\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_voice_cue(s: str) -> str:
+    return _VOICE_CUE_RE.sub("", s).strip()
+
+
 def _place_category(name: str) -> str | None:
     """'숙소-화장실 앞' → '숙소'. '-' 없으면 None(계층 없는 평범한 이름)."""
     i = name.find("-")
@@ -562,6 +575,7 @@ def resolve_element(work: str | None, mention: str) -> dict | None:
     mention = _nfc(mention).strip()
     if not mention:
         return None
+    mention = _strip_voice_cue(mention) or mention  # "강수정 (Na)"/"…(V.O.)" 등 대사 큐 접미 제거(시간대 아님)
     elems = load_elements(work)
     # ★2026-07-15 "민대표 이미 있었음"(실사용자 리포트) — 등록은 "민 대표"(공백 있음)로 돼있는데
     # 콘티/추출 LLM이 "민대표"(공백 없음)로 언급하면 exact-match(mention in _element_names(e))가

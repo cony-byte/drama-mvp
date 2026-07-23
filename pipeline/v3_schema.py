@@ -45,7 +45,7 @@ def is_completed(state: str) -> bool:
 # 구도 하나 = 스틸 1장 = 영상 1개. 컷 길이는 단일 구도가 유지되는 짧은 시간(인서트 1~2초,
 # 일반 3~5초, 감정 정점 6~8초)이라 1~8초로 잡는다.
 CUT_SECONDS_MIN, CUT_SECONDS_MAX = 1, 8
-EPISODE_SECONDS_MIN, EPISODE_SECONDS_MAX = 90, 110
+EPISODE_SECONDS_MIN, EPISODE_SECONDS_MAX = 90, 120
 _TIME_TOLERANCE = 0.5  # 컷 초 합과 씬 총초 사이 허용 오차(반올림 등)
 
 # ── 정규식 ───────────────────────────────────────────────────────────────
@@ -319,7 +319,7 @@ def validate_scene(scene: dict) -> list[str]:
 
 
 def validate_episode_timing(scenes: list[dict]) -> list[str]:
-    """화 전체 러닝타임(90~110초) 검증 — 씬별이 아니라 화 전체에서만 판단. 뼈대(컷 없음)든
+    """화 전체 러닝타임(90~120초) 검증 — 씬별이 아니라 화 전체에서만 판단. 뼈대(컷 없음)든
     상세콘티(컷 있음)든 씬 declared_seconds(컷 있으면 컷 합, 없으면 헤더 총초) 합으로 본다."""
     total = round(sum(s.get("declared_seconds") or 0 for s in scenes), 2)
     if not (EPISODE_SECONDS_MIN <= total <= EPISODE_SECONDS_MAX):

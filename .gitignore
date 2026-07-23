@@ -9,3 +9,8 @@ vendor/storyboard/data/refs/
 *.png
 data/studio.json
 data/studio.json.tmp
+
+# macOS/백업/휴지통
+.DS_Store
+data/studio.json.bak*
+vendor/storyboard/data/_trash/

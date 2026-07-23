@@ -852,6 +852,21 @@ def _block_props(scene: dict, block: dict | None) -> list[str]:
     return [p for p in prop_names if p and p in body]
 
 
+def _is_faceless_cut(block: dict | None) -> bool:
+    """얼굴이 주체가 아닌 컷 — 사물 인서트, 손만 보이는 클로즈업/부분, 뒷모습. 짧게(2초) 끊을 대상.
+    ★2026-07-23(사용자 지시): 인서트·손·뒷모습 컷은 늘어지면 지루하니 짧게. 얼굴 나오는 컷은 유지."""
+    header = (block or {}).get("header") or ""
+    text = (block or {}).get("text") or ""
+    tgt = header.rsplit("/", 1)[-1]
+    if header.strip().startswith("인서트") or "인서트-" in header:
+        return True
+    if "뒷모습" in header or "뒷모습" in text or "뒤에서" in tgt or "뒤쪽" in tgt:
+        return True
+    if "손" in tgt and ("클로즈업" in header or "부분" in header):  # 손만 보이는 컷
+        return True
+    return False
+
+
 def _scene_for_cut(scene: dict, block: dict | None) -> dict:
     """그 컷에 실제 나오는 인물·소품만 남긴 씬 사본. 스틸·영상 프롬프트의 '등장'·'소품' 선언이
     컷 밖 인물(태민)·소품(명함)을 흘려 생성기가 없어야 할 대상을 그리는 걸 막는다. ★2026-07-23:
@@ -970,6 +985,11 @@ def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
     미리보기 스틸 재사용으로 이미지 생성 비용·시간을 아낀다(승인 스틸 = 시작 프레임 앵커)."""
     scene_num = scene.get("scene_num")
     clip_id = clip.get("clip_id")
+    # ★2026-07-23(영상 resume): 이미 만든 영상이 디스크에 있으면 재사용하고 재생성 스킵 —
+    # 전체 제작이 끊기거나 일부 컷만 실패했을 때 성공한 컷은 그대로 두고 나머지만 이어서 만든다.
+    existing_video = _existing_video_path(work, episode, scene_num, clip_id)
+    if existing_video:
+        return {"clip_id": clip_id, "status": "ok", "still_png": still_png, "video_path": existing_video}
     png = still_png
     if png is None:
         try:
@@ -1065,13 +1085,31 @@ def _clip_plan_segment(scene: dict, clip: dict, video_path: str) -> dict:
     vo = v3_schema.clip_vo_lines(clip)
     narration = " ".join(l["text"] for l in vo) or None
     speaker = (vo[0]["speaker"] if vo else None) or "나레이션"
+    total = edit_plan._probe_duration(video_path)
+    start, duration = 0.0, total
+    blk = (clip.get("blocks") or [None])[0]
+    has_dlg = _clip_has_dialogue(clip)
+    faceless = _is_faceless_cut(blk)
+    # ★2026-07-23(페이싱):
+    #  (a) 얼굴이 주체가 아닌 컷(사물 인서트·손만·뒷모습)은 2초 이내로 짧게 끊는다(늘어짐 방지).
+    #  (b) 대사 컷은 말 앞 공백을 0.5초로 줄이고 말 뒤 0.5초만 — 대사는 안 자르되 앞뒤 늘어짐 제거.
+    #  얼굴 나오는 무대사 컷은 원본 유지.
+    if total > 0 and faceless:
+        duration = min(total, 2.0)   # 인서트·손·뒷모습은 무조건 2초 이내(명함 인쇄문구가 대사로 오탐돼도 캡)
+    elif total > 0 and has_dlg:
+        span = edit_plan._speech_span(video_path, total)
+        if span:
+            s = max(0.0, span[0] - edit_plan._LEAD_PAD)
+            e = min(total, span[1] + edit_plan._TAIL_PAD)
+            if e - s >= 0.5:
+                start, duration = s, e - s
     return {
         "scene_num": scene.get("scene_num"),
         "cut_num": _clip_ordinal(clip.get("clip_id")),
         "clip_id": clip.get("clip_id"),
         "video_path": video_path,
-        "start": 0.0,
-        "duration": edit_plan._probe_duration(video_path),
+        "start": start,
+        "duration": duration,
         "narration_text": narration,
         "speaker": speaker,
         "delivery": None,
@@ -1192,12 +1230,20 @@ def _v3_all_stills(v3map: dict[int, dict]) -> list[dict]:
     return out
 
 
+def _script_signature(script: str) -> str:
+    """뼈대를 만든 시점의 대본 지문(fingerprint) — 대본이 바뀌었는지 판별용."""
+    return hashlib.sha1((script or "").encode("utf-8")).hexdigest()
+
+
 def _ensure_v3_skeleton(episode: dict, script: str, num: int,
                         characters: list[dict] | None, job_id: str, save_fn) -> str:
-    """episode에 v3 뼈대가 없으면 생성·검증·저장하고 뼈대 원문을 반환. 이미 있으면 그대로 반환."""
+    """episode에 v3 뼈대가 없으면 생성·검증·저장하고 뼈대 원문을 반환. 이미 있고 ★그때의 대본과
+    지금 대본이 같으면★ 그대로 재사용한다. 대본이 수정됐으면(지문 불일치) 뼈대를 다시 만들고,
+    옛 대본 기준으로 만들어진 상세콘티(v3_scenes)는 무효화해 다음 단계가 새 대본으로 재생성되게 한다."""
+    src_sig = _script_signature(script)
     skeleton_text = episode.get("v3_skeleton")
-    if skeleton_text:
-        return skeleton_text
+    if skeleton_text and episode.get("v3_skeleton_src") == src_sig:
+        return skeleton_text                          # 대본 그대로 → 캐시 재사용(이어서 만들기 정상)
     jobs.update(job_id, stage="화 전체 뼈대 설계 중")
     skeleton_text, sk_scenes, sk_errors = generate_episode_skeleton_validated(
         script, episode=num, characters=characters)
@@ -1209,8 +1255,40 @@ def _ensure_v3_skeleton(episode: dict, script: str, num: int,
     scene_lines = [[s["scene_num"], s.get("title") or ""] for s in sk_scenes
                    if s.get("scene_num") is not None]
     if save_fn:
-        save_fn(v3_skeleton=skeleton_text, scene_lines=scene_lines)
+        # 대본 수정으로 재생성된 경우 v3_scenes(옛 대본 기준 상세콘티)를 비워 새로 만들게 한다.
+        save_fn(v3_skeleton=skeleton_text, v3_skeleton_src=src_sig,
+                scene_lines=scene_lines, v3_scenes=[])
     return skeleton_text
+
+
+def _existing_still_png(work: str, episode, scene_num: int, clip_id: str) -> bytes | None:
+    """이미 만들어 디스크에 저장된 컷 스틸(스틸컷/<N>씬/clip<id>.png)을 읽어 돌려준다. 없으면 None.
+    ★2026-07-23(resume): 미리보기가 끊겨도 이미 만든 컷은 재생성 않고 이걸로 재사용 — 이어서 만들기."""
+    try:
+        root = vp_store.out_root(work)
+        if not root or clip_id is None:
+            return None
+        p = root / f"{episode}화" / "스틸컷" / f"{scene_num}씬" / f"clip{clip_id}.png"
+        return p.read_bytes() if p.exists() else None
+    except Exception:
+        return None
+
+
+def _existing_video_path(work: str, episode, scene_num: int, clip_id: str) -> str | None:
+    """이미 만들어 디스크에 저장된 컷 영상(영상/<N>씬/video_s<N>_clip<id>_*.mp4)의 경로. 없으면 None.
+    ★2026-07-23(영상 resume): 전체 제작이 끊기거나 일부 컷만 실패했을 때, 이미 만든 영상은
+    재생성 않고 그대로 재사용 — 실패했던 나머지 컷만 이어서 만든다."""
+    try:
+        root = vp_store.out_root(work)
+        if not root or clip_id is None:
+            return None
+        d = root / f"{episode}화" / "영상" / f"{scene_num}씬"
+        if not d.exists():
+            return None
+        matches = sorted(d.glob(f"video_s{scene_num}_clip{clip_id}_*.mp4"))
+        return str(matches[0]) if matches else None
+    except Exception:
+        return None
 
 
 def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
@@ -1232,21 +1310,30 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
         jobs.update(job_id, total=len(skel))
 
         v3map = _v3_scene_map(episode)
-        if scene_num in v3map and v3map[scene_num].get("stills"):
-            jobs.update(job_id, status="done", stage="완료", stills=_v3_all_stills(v3map))
-            return
         if scene_num not in skel:
             raise RuntimeError(f"씬{scene_num}을 화 뼈대에서 찾을 수 없어요.")
 
         prior_handoff = (v3map.get(scene_num - 1) or {}).get("handoff")
+        # ★2026-07-23(resume): 저장된 상세콘티 파일이 있으면 재생성 없이 그대로 재사용한다 —
+        # 컷 id가 안정돼야 이미 만든 스틸(디스크 clip{id}.png)을 컷별로 재사용/이어서 만들 수 있다.
+        # (예전엔 재실행마다 콘티를 새로 뽑아 컷 구성이 바뀌어 이어 만들기가 불가능했다.)
         jobs.update(job_id, stage=f"씬{scene_num} 상세 콘티 작성 중")
-        scene, conti_text, errors = build_scene_blocks(
-            skel[scene_num], script, prior_handoff=prior_handoff,
-            characters=characters, work=work,
-            synopsis=project.get("synopsis") or "", summary=episode.get("summary") or "")
-        if errors or not scene:
-            raise RuntimeError(f"씬{scene_num} 콘티 검증 실패: " + " / ".join(errors or ["파싱 실패"]))
-        _save_conti_for_review(work, num, scene_num, conti_text)  # 검수용 텍스트 파일로 남김
+        edited = _load_conti_from_review(work, num, scene_num)
+        scene = conti_text = None
+        if edited:
+            parsed = parsing.split_scenes(edited)
+            if parsed:
+                _, hdr, body = parsed[0]
+                scene = v3_schema.parse_scene(hdr, body)
+                conti_text = edited
+        if scene is None:
+            scene, conti_text, errors = build_scene_blocks(
+                skel[scene_num], script, prior_handoff=prior_handoff,
+                characters=characters, work=work,
+                synopsis=project.get("synopsis") or "", summary=episode.get("summary") or "")
+            if errors or not scene:
+                raise RuntimeError(f"씬{scene_num} 콘티 검증 실패: " + " / ".join(errors or ["파싱 실패"]))
+            _save_conti_for_review(work, num, scene_num, conti_text)  # 검수용 텍스트 파일로 남김
 
         jobs.update(job_id, stage=f"씬{scene_num} 배경·의상 준비 중")
         try:
@@ -1264,43 +1351,60 @@ def preview_scene_v3(project: dict, episode: dict, job_id: str, save_fn=None,
         # 잃는 건 클립 간 톤 연속성뿐(연속성 체이닝 제거 = 병렬의 대가). 완성 컷부터 하나씩 노출.
         clips = scene.get("clips") or []
         prev_v3 = _v3_all_stills(v3map)  # 이전 씬들 스틸(이번 씬은 아래서 채움)
+        # 이미 만든 스틸: 이 세션 상태(v3map, 메모리) — 있으면 그 레코드 그대로 재사용
+        done_recs = {s.get("clip_id"): s for s in ((v3map.get(scene_num) or {}).get("stills") or [])
+                     if s.get("clip_id") and s.get("image")}
         results: list = [None] * len(clips)
         _slock = threading.Lock()
-        jobs.update(job_id, stage=f"씬{scene_num} 스틸 {len(clips)}컷 생성 중(병렬)")
+        _handoff = v3_schema.build_scene_handoff(scene, prior_handoff)
+
+        def _publish_and_save():
+            """★2026-07-23(resume): 스틸 하나 완성할 때마다 job 노출 + studio.json 증분 저장 —
+            중간에 끊겨도 이미 만든 컷이 앱 상태에 남아 다음 실행에서 이어서 만들 수 있다."""
+            v3map[scene_num] = {
+                "scene_num": scene_num, "state": "stills_ready", "conti_text": conti_text,
+                "handoff": _handoff, "stills": [r for r in results if r]}
+            jobs.update(job_id, stills=prev_v3 + [r for r in results if r])
+            if save_fn:
+                save_fn(v3_scenes=[v3map[k] for k in sorted(v3map)],
+                        scene_stills=_v3_all_stills(v3map))
+
+        n_have = len(done_recs) + sum(1 for c in clips
+                                      if c.get("clip_id") not in done_recs
+                                      and _existing_still_png(work, num, scene_num, c.get("clip_id")))
+        jobs.update(job_id, stage=f"씬{scene_num} 스틸 {len(clips)}컷 (완성 {n_have} · 이어서 생성)")
 
         def _one_clip(ci_clip):
             ci, clip = ci_clip
-            try:
-                png, _cost = generate_clip_still(scene, clip, work=work, characters=characters)
-            except Exception as e:
-                log.exception("스틸 생성 실패 (씬%s 클립 %s): %s", scene_num, clip.get("clip_id"), e)
-                return
             clip_id = clip.get("clip_id")
-            try:
-                vp_store.save_still(work, scene_num=scene_num, prompt_summary=clip.get("label", ""),
-                                    png=png, episode=num, clip_id=clip_id)
-            except Exception:
-                pass
+            reused = done_recs.get(clip_id)
+            if reused:  # 앱 상태에 이미 있음 → 그대로
+                with _slock:
+                    results[ci] = reused
+                    _publish_and_save()
+                return
+            png = _existing_still_png(work, num, scene_num, clip_id)  # 디스크에 있으면 재사용(이어서)
+            if png is None:
+                try:
+                    png, _cost = generate_clip_still(scene, clip, work=work, characters=characters)
+                except Exception as e:
+                    log.exception("스틸 생성 실패 (씬%s 클립 %s): %s", scene_num, clip_id, e)
+                    return
+                try:
+                    vp_store.save_still(work, scene_num=scene_num, prompt_summary=clip.get("label", ""),
+                                        png=png, episode=num, clip_id=clip_id)
+                except Exception:
+                    pass
             rec = {"scene_num": scene_num, "cut_num": ci + 1, "clip_id": clip_id,
                    "caption": clip.get("label", ""), "image": oi.png_data_url(png),
                    "video_path": None, "representative": True}
             with _slock:
                 results[ci] = rec
-                jobs.update(job_id, stills=prev_v3 + [r for r in results if r])  # 완성분부터 노출
+                _publish_and_save()
         workers = max(1, min(sb_config.OPENROUTER_IMG_WORKERS, len(clips) or 1))
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as _ex:
             list(_ex.map(_one_clip, list(enumerate(clips))))
-        stills = [r for r in results if r]
-
-        v3map[scene_num] = {
-            "scene_num": scene_num, "state": "stills_ready", "conti_text": conti_text,
-            "handoff": v3_schema.build_scene_handoff(scene, prior_handoff), "stills": stills,
-        }
-        v3_scenes = [v3map[k] for k in sorted(v3map)]
-        all_stills = _v3_all_stills(v3map)
-        if save_fn:
-            save_fn(v3_scenes=v3_scenes, scene_stills=all_stills)
-        jobs.update(job_id, status="done", stage="완료", stills=all_stills)
+        jobs.update(job_id, status="done", stage="완료", stills=_v3_all_stills(v3map))
     except Exception as e:
         jobs.update(job_id, status="error", stage="오류", error=str(e))
 
@@ -1821,8 +1925,11 @@ def generate_image_for_shot(shot: dict, work: str | None = None,
 
 
 _YOLO_WEIGHTS = os.path.join(os.path.dirname(__file__), "models", "yolov8n.pt")
-_FACE_HEIGHT_RATIO = 0.30  # 사람 박스 높이 중 상단 몇 %를 "얼굴 영역"으로 근사해서 덮을지
-_FACE_PAD_X, _FACE_PAD_Y = 0.05, 0.05
+_FACE_HEIGHT_RATIO = 0.38  # 사람 박스 높이 중 상단 몇 %를 "얼굴 영역"으로 근사해서 덮을지
+# ★2026-07-23: 얼굴은 어깨보다 좁으니 사람 박스 폭 전체가 아니라 중앙 밴드(이 비율)만 얼굴로 덮는다
+# — 예전엔 전체 폭이라 격자가 배경·어깨까지 헐겁게 퍼지고 정작 얼굴엔 성기게 걸렸다.
+_FACE_WIDTH_RATIO = 0.55
+_FACE_PAD_Y = 0.06
 _PERSON_CLASS = 0
 _PERSON_CONF_THRESHOLD = 0.4
 
@@ -1862,11 +1969,12 @@ def _detect_face_boxes(png: bytes, W: int, H: int) -> list[tuple[int, int, int, 
                     continue
                 x1, y1, x2, y2 = b.xyxy[0].tolist()
                 h = y2 - y1
-                fy0 = y1 - h * _FACE_PAD_Y
-                fy1 = y1 + h * _FACE_HEIGHT_RATIO
+                fy0 = y1 - h * _FACE_PAD_Y                       # 정수리 살짝 위
+                fy1 = y1 + h * _FACE_HEIGHT_RATIO                # 사람 상단 일부 = 얼굴 영역
                 w = x2 - x1
-                px = w * _FACE_PAD_X
-                x0 = max(0.0, x1 - px); x1p = min(float(W), x2 + px)
+                cx = (x1 + x2) / 2.0                             # 얼굴은 어깨보다 좁으니 중앙 밴드만
+                half = w * _FACE_WIDTH_RATIO / 2.0
+                x0 = max(0.0, cx - half); x1p = min(float(W), cx + half)
                 y0 = max(0.0, fy0); y1p = min(float(H), fy1)
                 boxes.append((int(x0), int(y0), int(x1p - x0), int(y1p - y0)))
             if boxes:
@@ -1875,11 +1983,11 @@ def _detect_face_boxes(png: bytes, W: int, H: int) -> list[tuple[int, int, int, 
         pass
     # 폴백: opencv/ultralytics 미설치(배포=homebrew python 등) 시 PIL만으로 상단 중앙을 넉넉히
     # 덮는다 — 감지 아닌 휴리스틱이지만 no-op보다 훨씬 안전(co-writer-bot _heuristic_boxes_pil 이식).
-    w, h = int(W * 0.72), int(H * 0.42)
+    w, h = int(W * 0.5), int(H * 0.4)
     return [((W - w) // 2, int(H * 0.06), w, h)]
 
 
-_GRID_CELLS = 5  # 5×5
+_GRID_CELLS = 8  # 8×8 (촘촘 — 얼굴을 더 촘촘히 덮어 안전필터 회피 강화)
 
 
 def _facegrid_overlay(png: bytes) -> bytes:
@@ -1900,11 +2008,12 @@ def _facegrid_overlay(png: bytes) -> bytes:
     color = (237, 28, 36, 255)
     for x, y, w, h in _detect_face_boxes(png, W, H):
         x0, y0, x1, y1 = x, y, x + w, y + h
+        lw = max(4, W // 110)  # 선 굵기 — 얼굴을 더 확실히 가리게 굵게
         for i in range(_GRID_CELLS + 1):
             gx = round(x0 + (x1 - x0) * i / _GRID_CELLS)
-            d.line([(gx, y0), (gx, y1)], fill=color, width=max(2, W // 200))
+            d.line([(gx, y0), (gx, y1)], fill=color, width=lw)
             gy = round(y0 + (y1 - y0) * i / _GRID_CELLS)
-            d.line([(x0, gy), (x1, gy)], fill=color, width=max(2, W // 200))
+            d.line([(x0, gy), (x1, gy)], fill=color, width=lw)
     out = io.BytesIO()
     Image.alpha_composite(base, overlay).convert("RGB").save(out, format="PNG")
     return out.getvalue()
@@ -1963,10 +2072,11 @@ _VIDEO_IDENTITY_LOCK = (
     "number of people and the same identity for each. Do not merge, swap, or replace faces, and do "
     "not add any background people who are not in the reference image. ")
 _VIDEO_CAMERA_LOCK = (
-    "Keep the camera static/locked in place by default — do not push in, zoom, dolly, or pan "
-    "unless the shot description below explicitly calls for camera movement. Maintain the exact "
-    "framing/shot size (e.g., medium shot stays medium shot) from the first frame throughout — "
-    "do not drift into a closer shot on your own. ")
+    "Give the camera a gentle, cinematic life: you MAY add a slow, subtle push-in or pull-back, "
+    "or a slow horizontal pan, when it suits the shot — keep it minimal, smooth and unobtrusive. "
+    "No fast zoom, no dolly, no handheld shake, no whip pan. Do NOT drastically change the shot "
+    "size from the first frame — a medium shot may drift only slightly and must stay essentially a "
+    "medium shot. Prefer the shot description's camera cue below when present. ")
 _VIDEO_STYLE_LOCK = (
     "Semi-realistic cinematic K-drama style, ~80% realism (photoreal lighting/proportion/depth "
     "with a subtly painterly finish, not a flat cartoon/anime, not a pure photograph). ")
@@ -1987,6 +2097,19 @@ _VIDEO_TRAILING = (
     "progression naturally in sequence — this is one continuous shot, no camera cut, so keep the "
     "exact same location, lighting, camera framing and background throughout, no scene change or "
     "transition to a different setup.")
+
+# ★2026-07-23(seedance 정답 스펙 이식): 입력 이미지를 <<<image_1>>>로 이름표 바인딩해 "확정 시작
+# 프레임"으로 못박는다 — 이게 없으면 seedance가 input_references를 느슨한 참조로만 써서 인물·성별이
+# 통째로 바뀐다(실측). 기존 ref_lock의 '움직임만 애니메이트·나머지 동일 유지' 지시를 여기에 합쳤다.
+_VIDEO_IMAGE_ANCHOR = (
+    "<<<image_1>>> is the clean approved start frame and must remain the exact identity, costume, "
+    "location, lighting, and screen-direction anchor. Only animate the motion described below; every "
+    "visual element not explicitly described as changing must stay identical to <<<image_1>>> "
+    "throughout the video. ")
+# Style & Mood — 정답 스펙의 'natural human skin texture' 포함(사실적 K-드라마 룩).
+_VIDEO_STYLE_MOOD = (
+    "Style & Mood: photorealistic cinematic Korean drama look (~80% realism, natural human skin "
+    "texture, cinematic lighting), a clearly fictional digital character, not illustration/cartoon/anime. ")
 
 
 # ★2026-07-22: 대사 없는 컷은 generate_audio=False — 자동 생성 음성이 'real person audio'
@@ -2044,24 +2167,22 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
     def _is_filter(e):
         return "InputImageSensitiveContentDetected" in str(e)
 
-    # ★2026-07-23 조립 순서(co-writer-bot 이식): [잠금 접두: fiction·ref·정체성·카메라·화풍]
-    # → 컷 내용(motion_prompt) → dialogue_lock → 공통 트레일링(표정·연속샷). 안전필터 재시도
-    # 시에만 grid_anchor를 이 앞에 덧붙인다.
-    locked_prompt = (_video_lock_prefix() + motion_prompt + " " + dialogue_lock
-                     + _VIDEO_TRAILING).strip()
+    # ★2026-07-23 조립(seedance 정답 스펙): <<<image_1>>> 앵커(입력 이미지=확정 시작 프레임) →
+    # 가상인물(안전) → 정체성 → 카메라 → Style&Mood → 컷 내용 → dialogue_lock → 트레일링.
+    # 격자 재시도도 같은 프롬프트를 쓴다(이미지만 얼굴 격자 오버레이) — image_1 앵커가 그대로 적용된다.
+    locked_prompt = (_VIDEO_IMAGE_ANCHOR + _VIDEO_FICTION_LOCK + _VIDEO_IDENTITY_LOCK
+                     + _VIDEO_CAMERA_LOCK + _VIDEO_STYLE_MOOD + motion_prompt + " "
+                     + dialogue_lock + _VIDEO_TRAILING).strip()
     grid_used = False
     try:
         url, cost = _gen_once(png, locked_prompt)
     except Exception as e:
         if not _is_filter(e):
             raise
-        # 안전필터 → 얼굴 격자로 재시도(실패는 아니지만 왜 이 컷이 느리거나 다르게 나오는지 진단용)
+        # 안전필터 → 얼굴 격자로 재시도(진단용 로그). 프롬프트는 그대로(image_1 앵커가 격자 이미지에도 적용).
         log.info("⚠ 안전필터 감지 (씬%s %s) — 얼굴 격자로 재시도합니다.", scene_num, unit)
-        grid_anchor = (
-            f"<<<{anchor_name}>>> is the clean approved start frame and must remain the exact "
-            f"identity, costume, location, lighting, and screen-direction anchor.\n")
         try:
-            url, cost = _gen_once(_facegrid_overlay(png), grid_anchor + locked_prompt)
+            url, cost = _gen_once(_facegrid_overlay(png), locked_prompt)
         except Exception as e2:
             if _is_filter(e2):
                 raise RuntimeError(

@@ -87,7 +87,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 주요 CTA — 그라데이션 + 부드러운 그림자 */
 button#startChatBtn, button#restartBtn, button#errorRetryBtn, button#finalizeBtn,
 button#nextStageBtn, button#goToStudioBtn,
-button#makeDramaBtn, button#makeVideoFromStillsBtn {
+button#makeDramaBtn, button#makeVideoFromStillsBtn, button#v3PreviewBtn {
   width: 100%;
   padding: 16px;
   border-radius: 14px;
@@ -733,6 +733,169 @@ button#addEpisodeBtn {
 }
 .script-line { white-space: pre-wrap; }
 .script-spacer { height: 0.8em; }
+
+/* 대사(대사) vs 지문(서술/괄호) 구분 */
+.script-dialogue {
+  display: grid;
+  grid-template-columns: minmax(0, auto) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  margin: 4px 0;
+}
+.dialogue-char {
+  color: var(--accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.dialogue-text { white-space: pre-wrap; }
+.dialogue-cue {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.92em;
+}
+.script-direction {
+  color: var(--muted);
+  font-style: italic;
+  white-space: pre-wrap;
+  margin: 3px 0;
+}
+
+/* 대본 씬 카드 */
+.script-scenes { display: flex; flex-direction: column; gap: 10px; }
+.script-empty {
+  background: var(--card);
+  border-radius: 14px;
+  padding: 16px;
+  color: var(--muted);
+}
+.scene-card {
+  background: var(--card);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.scene-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.scene-collapse-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.scene-caret {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+.scene-card.collapsed .scene-caret { transform: rotate(-90deg); }
+.scene-num {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-dim);
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.scene-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scene-header-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 3px 6px;
+}
+.scene-header-input:hover { border-color: rgba(255, 255, 255, 0.12); }
+.scene-header-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+.scene-edit-btn { flex-shrink: 0; padding: 3px 8px; }
+.scene-card-body {
+  padding: 2px 14px 14px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.scene-card.collapsed .scene-card-body { display: none; }
+
+/* 씬 본문 바로 편집(미확정 기본 상태) */
+.scene-edit-area {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.scene-edit-area:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* 자동저장 순간 표시 */
+.scene-card { transition: border-color 0.25s ease; }
+.scene-card.scene-saved { border-color: var(--ok); }
+
+/* 대본 확정(잠금) */
+.script-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.script-confirmed-note {
+  color: var(--ok);
+  font-size: 13px;
+  font-weight: 600;
+}
+/* 대본 확정 버튼 — 흰 기본 버튼으로 뜨던 것 스타일링(확정=초록). 아래 CTA 버튼과 동일한 full-width */
+button#confirmScriptBtn {
+  width: 100%;
+  padding: 16px;
+  border-radius: 14px;
+  border: none;
+  background: var(--ok);
+  color: #0b1a10;
+  font-size: 16px;
+  font-weight: 700;
+}
+#episodeDetailScript.locked .scene-card {
+  border-color: rgba(74, 222, 128, 0.22);
+}
 .head-btns { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 #subtitleEditRow { display: flex; flex-direction: column; gap: 8px; }
 #episodeSubtitleInput {
@@ -959,3 +1122,27 @@ video#resultVideo {
 #errorView { text-align: center; color: #f87171; }
 
 .hidden { display: none !important; }
+
+/* 분량 게이트 챗봇 패널 — [확정] 시 러닝타임 측정/자동맞춤 대화 */
+.gate-chat { margin: 10px 0 4px; }
+.gate-chat.hidden { display: none; }
+.gate-bubble {
+  background: rgba(90, 140, 255, 0.10);
+  border: 1px solid rgba(120, 160, 255, 0.30);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.gate-bubble p { margin: 0; }
+.gate-bubble small { opacity: 0.7; }
+.gate-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.gate-btn {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit; border-radius: 999px;
+  padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+.gate-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.gate-btn.primary { background: #4d78ff; border-color: #4d78ff; color: #fff; font-weight: 600; }
+.gate-btn.primary:hover { background: #3d68ef; }

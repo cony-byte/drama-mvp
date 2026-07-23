@@ -35,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from pipeline import chat, jobs, parsing, studio
+from pipeline import duration_gate
 from functools import partial
 
 from pipeline.orchestrator import (
@@ -121,16 +122,28 @@ def chat_continue(session_id: str, req: ChatReplyRequest):
 
 
 @app.post("/api/chat/{session_id}/finalize")
-def chat_finalize(session_id: str):
-    """텍스트 카드(로그라인+두 주인공)만 빠르게 만들어서 바로 보여준다 — 인물 이미지는
-    포함 안 함(프론트가 화면 전환 직후 /api/portrait를 따로 불러서 채워 넣음, 그래야
-    이미지 생성 때문에 화면 전환 자체가 느려지지 않는다). "재생성"도 이 엔드포인트를
-    그대로 다시 호출한다."""
+def chat_finalize(session_id: str, request: Request):
+    """텍스트 카드(로그라인+두 주인공)를 만들고 ★그 시점에 스튜디오 작품을 생성한다(온보딩 B).
+    - 첫 호출: create_project로 새 작품 생성 + 세션↔작품 매핑 기록(chat.set_project).
+    - 재생성(같은 세션 재호출): 기존 작품을 갱신(로그라인·인물·키장면) — 새 작품을 또 만들지
+      않는다(중복 방지). 시놉시스는 첫 생성 때만 만든다(재생성을 빠르게 — 시놉시스는 카드에
+      안 쓰이고 스튜디오에서 재생성 버튼으로 갱신 가능).
+    인물 이미지는 여기 포함 안 함 — 프런트가 화면 전환 후 /api/portrait로 채우고, '스튜디오로
+    이동' 때 편집분(이미지 포함)을 PATCH로 반영한다. 반환에 project_id를 실어 보낸다."""
     history = chat.get_history(session_id)
     if history is None:
         raise HTTPException(404, "채팅 세션을 찾을 수 없어요.")
     idea = compose_idea_from_chat(history)
-    return generate_pitch_card(idea)
+    card = generate_pitch_card(idea)
+    pid = chat.get_project(session_id)
+    if pid and studio.get_project(pid):
+        studio.update_project(pid, logline=card.get("logline", ""),
+                              characters=card.get("characters") or [],
+                              key_scene=card.get("key_scene"))
+    else:
+        pid = studio.create_project(idea, dict(card), owner=_owner(request))
+        chat.set_project(session_id, pid)
+    return {**card, "project_id": pid}
 
 
 class PortraitRequest(BaseModel):
@@ -266,6 +279,8 @@ class ProjectUpdateRequest(BaseModel):
     title: str | None = None
     logline: str | None = None
     synopsis: str | None = None
+    characters: list[CharacterModel] | None = None  # 온보딩 B: 스튜디오 이동 시 편집분(인물 이미지 포함) 반영
+    key_scene: KeySceneModel | None = None
 
 
 @app.patch("/api/studio/{project_id}")
@@ -400,6 +415,46 @@ def studio_update_episode(project_id: str, num: int, req: EpisodeUpdateRequest):
     fields = {k: v for k, v in req.model_dump().items() if v is not None}
     studio.update_episode(project_id, num, **fields)
     return studio.get_episode(project_id, num)
+
+
+class AutofitRequest(BaseModel):
+    mode: str = "compress"   # compress | expand | split
+
+
+@app.post("/api/studio/{project_id}/episodes/{num}/measure-duration")
+def studio_measure_duration(project_id: str, num: int):
+    """[확정] 게이트 1단계 — 대본으로 스켈레톤을 만들어 화 전체 러닝타임을 재고 90~120초
+    게이트를 판정한다(상세콘티·이미지·영상은 만들지 않음, LLM 1회). 반환: duration_gate.measure()."""
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    if not (episode.get("script") or "").strip():
+        raise HTTPException(400, "대본이 먼저 있어야 분량을 잴 수 있어요.")
+    return duration_gate.measure(episode["script"], episode=num,
+                                 characters=project.get("characters") or [])
+
+
+@app.post("/api/studio/{project_id}/episodes/{num}/autofit-duration")
+def studio_autofit_duration(project_id: str, num: int, req: AutofitRequest):
+    """[확정] 게이트 2단계 — 대본을 AI로 재작성(compress/expand/split)해 목표 분량에 맞추고
+    재측정한다. 조정된 대본을 episode.script에 저장(사용자가 명시적으로 요청한 조정)."""
+    if req.mode not in ("compress", "expand", "split"):
+        raise HTTPException(400, "mode는 compress|expand|split 중 하나예요.")
+    project = studio.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "프로젝트를 찾을 수 없어요.")
+    episode = studio.get_episode(project_id, num)
+    if not episode:
+        raise HTTPException(404, "화를 찾을 수 없어요.")
+    if not (episode.get("script") or "").strip():
+        raise HTTPException(400, "대본이 먼저 있어야 맞출 수 있어요.")
+    result = duration_gate.autofit(episode["script"], mode=req.mode, episode=num,
+                                   characters=project.get("characters") or [])
+    studio.update_episode(project_id, num, script=result["script"])
+    return result
 
 
 @app.post("/api/studio/{project_id}/episodes/{num}/generate-script")

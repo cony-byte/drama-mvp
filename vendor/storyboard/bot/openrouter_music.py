@@ -43,13 +43,18 @@ def build_mood_prompt(mood_hint: str) -> str:
     이 모듈은 app.py를 import하지 않는다 — 이 repo의 기존 관례상 app.py가 top-level
     오케스트레이터로 bot/*를 import하는 방향만 있고 반대 방향(bot/* → app.py)은 없어서,
     분위기 텍스트는 app.py 쪽에서 미리 뽑아 문자열로 넘겨받는다."""
+    # ★2026-07-23: Lyria가 무보컬 지시를 무시하고 가사를 넣는 실측 → (1) 프롬프트 맨 앞에
+    # [instrumental] 태그(이 모델이 쓰는 무보컬 제어 토큰), (2) 아예 '솔로 피아노 멜로디' 단일
+    # 악기로 지정(솔로 피아노 곡엔 보컬이 생길 여지가 없음), (3) 무보컬 문구 반복. 사용자 요청:
+    # 가사 없이 피아노 멜로디만.
+    _PIANO = ("Solo piano only — a gentle, understated piano melody (optionally very soft ambient "
+              "pad underneath). STRICTLY INSTRUMENTAL: no vocals, no lyrics, no singing, no humming, "
+              "no human voice. Sits low under dialogue, seamless loopable feel.")
     hint = (mood_hint or "").strip()
     if hint:
-        return (f"Instrumental background music for a short-form Korean drama. "
-                f"Story tone/mood: {hint}. Match the instrumentation, tempo, and atmosphere to "
-                f"this tone. No vocals, instrumental only, seamless loopable feel.")
-    return ("Calm, emotionally neutral instrumental background music for a short-form drama. "
-            "Soft, understated, no vocals, instrumental only, seamless loopable feel.")
+        return (f"[instrumental] Solo piano background music for a short-form Korean drama. "
+                f"Story tone/mood: {hint}. Match the piano's mood/tempo to this tone. {_PIANO}")
+    return (f"[instrumental] Calm, understated solo piano background music for a short-form drama. {_PIANO}")
 
 
 def generate(prompt: str, *, model: str | None = None, timeout: int | None = None) -> bytes:

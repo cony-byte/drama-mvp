@@ -82,6 +82,37 @@ def _probe_duration(path: str) -> float:
         return 0.0
 
 
+_LEAD_PAD, _TAIL_PAD = 0.5, 0.5  # ★2026-07-23 대사 앞/뒤로 남길 여백(초) — 앞 공백을 0.5초로 줄이고 뒤 0.5초 패딩
+
+
+def _speech_span(path: str, total: float, noise_db: int = -30, min_sil: float = 0.35):
+    """ffmpeg silencedetect로 클립 오디오의 '말이 있는 구간' (speech_start, speech_end) 근사.
+    말 앞뒤의 늘어지는 무음을 잘라 리듬을 빠르게 하려는 용도(대사 컷 한정 호출). 판정 불가·
+    무음뿐이면 None. 중간 무음(말 사이 쉼)은 건드리지 않고 앞·뒤 무음만 본다."""
+    try:
+        r = subprocess.run(
+            [config.FFMPEG_BIN, "-i", path, "-af",
+             f"silencedetect=noise={noise_db}dB:d={min_sil}", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=30)
+        txt = r.stderr or ""
+        starts = [float(x) for x in re.findall(r"silence_start:\s*([-\d.]+)", txt)]
+        ends = [float(x) for x in re.findall(r"silence_end:\s*([-\d.]+)", txt)]
+        if not starts:                       # 무음 구간 자체가 없음 = 내내 소리 → 말=전체
+            return (0.0, total)
+        speech_start = ends[0] if (starts[0] <= 0.15 and ends) else 0.0   # 리딩 무음 끝 = 말 시작
+        if len(starts) > len(ends):          # 마지막 무음이 EOF까지(짝 안 맞음) → 그 앞까지가 말
+            speech_end = starts[-1]
+        elif ends and (total - ends[-1]) < 0.2:  # 마지막 무음이 끝 직전에 끝남 → 그 앞까지가 말
+            speech_end = starts[-1]
+        else:
+            speech_end = total
+        if speech_end - speech_start < 0.2:
+            return None
+        return (speech_start, speech_end)
+    except Exception:
+        return None
+
+
 def _norm(s: str) -> str:
     return unicodedata.normalize("NFC", re.sub(r"\s+", "", s or ""))
 

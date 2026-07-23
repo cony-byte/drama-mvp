@@ -49,29 +49,207 @@ function renderInlineMarkdown(text) {
     .replace(/\*([^*]+?)\*/g, "<em>$1</em>");
 }
 
-function renderScriptMarkdown(text) {
+// 등장인물 이름 집합 — 성 뗀 이름 변형도 넣는다(대본은 "이수진"을 "수진"으로 쓰는 경우가 많다).
+function buildNameSet(chars) {
+  const set = new Set();
+  for (const c of chars || []) {
+    const n = (c.name || "").trim();
+    if (!n) continue;
+    set.add(n);
+    if (n.length >= 3) set.add(n.slice(-2)); // 이수진→수진, 강태민→태민
+  }
+  return set;
+}
+const _stripTrailingParen = (s) => s.replace(/\s*[(（][^)）]*[)）]\s*$/, "").trim();
+
+// "이름: 대사" / "이름 (Na): 대사" 형태(콜론형 대사) 판별. 알려진 인물명이면 확실, 아니면
+// 짧고 공백·문장부호 없는 이름일 때만 대사로 인정(메타/서술 줄 오검출 방지).
+function matchColonDialogue(trimmed, names) {
+  const idx = trimmed.search(/[:：]/);
+  if (idx < 0) return null;
+  const before = trimmed.slice(0, idx);
+  const text = trimmed.slice(idx + 1).replace(/^\s+/, "");
+  const pm = before.match(/^(.*?)\s*([(（][^)）]*[)）])\s*$/); // 이름 뒤 (Na)/(E) 등 분리
+  const bare = (pm ? pm[1] : before).trim();
+  const suffix = pm ? pm[2] : "";
+  if (!bare) return null;
+  const known = names && names.has(bare);
+  const looksName = bare.length <= 10 && !/[.!?…,\s]/.test(bare);
+  if (!known && !looksName) return null;
+  return { name: bare, suffix, text };
+}
+
+// 대사 한 줄 HTML — 인물명(강조) + 대사. 이름 옆 (Na)/(E) 접미는 이름과 함께 강조 처리하고,
+// 대사 본문 안의 (지문)만 muted 처리한다.
+function dialogueHtml(name, suffix, rawText) {
+  const label = suffix ? `${escapeHtml(name)} ${escapeHtml(suffix)}` : escapeHtml(name);
+  const body = renderInlineMarkdown(rawText)
+    .replace(/([(（])([^)）]*)([)）])/g, '<span class="dialogue-cue">$1$2$3</span>');
+  return `<div class="script-dialogue">`
+    + `<span class="dialogue-char">${label}</span>`
+    + `<span class="dialogue-text">${body}</span></div>`;
+}
+
+// *…* / **…** 로 감싼 한 줄을 벗겨 안쪽만 반환(감싼 게 아니면 그대로).
+function _unwrapStars(t) {
+  const m = t.match(/^(\*{1,2})([^\n]+?)\1$/);
+  return m ? m[2].trim() : t;
+}
+
+// 대본 렌더 — 지문(서술/괄호)과 대사(콜론형·이름헤더형)를 구분한다. names(Set)를 주면 이름-헤더형
+// 대사("이름"만 있는 줄 다음이 대사)까지 잡는다. 인물+대사를 *…*로 감싼 표기도 대사로 인식한다.
+function renderScriptMarkdown(text, names) {
   const lines = String(text || "(아직 없음)").split(/\r?\n/);
   const firstContent = lines.findIndex((line) => line.trim());
+  const out = [];
 
-  return lines.map((line, index) => {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const trimmed = line.trim();
-    if (!trimmed) return '<div class="script-spacer" aria-hidden="true"></div>';
-    if (/^-{3,}$/.test(trimmed)) return '<hr class="script-divider">';
+    if (!trimmed) { out.push('<div class="script-spacer" aria-hidden="true"></div>'); continue; }
+    if (/^-{3,}$/.test(trimmed)) { out.push('<hr class="script-divider">'); continue; }
 
+    // *…*/**…** 로 감싼 줄도 벗겨서 판정(인물+대사를 *로 감싸 강조하는 표기 지원)
+    const core = _unwrapStars(trimmed);
+
+    // 대사(콜론형) — 감싼 것도 인식
+    const cd = matchColonDialogue(core, names);
+    if (cd) { out.push(dialogueHtml(cd.name, cd.suffix, cd.text)); continue; }
+
+    // 지문: 통째로 괄호로 감싼 줄
+    if (/^[(（].*[)）]$/.test(core)) {
+      out.push(`<div class="script-direction">${renderInlineMarkdown(core)}</div>`);
+      continue;
+    }
+
+    // 제목/씬 헤딩(마크다운) — 원문 기준
     const heading = trimmed.match(/^#{1,3}\s+(.+)$/);
     const singleStarTitle = trimmed.match(/^\*([^*].*?)\*$/);
     const boldLine = trimmed.match(/^\*\*(.+?)\*\*$/);
-    const emphasizedTitle = index === firstContent
+    const emphasizedTitle = i === firstContent
       && (singleStarTitle || (boldLine && !/^\d+\./.test(boldLine[1].trim())));
     if (heading || emphasizedTitle) {
-      return `<h4 class="script-title">${renderInlineMarkdown((heading || emphasizedTitle)[1])}</h4>`;
+      out.push(`<h4 class="script-title">${renderInlineMarkdown((heading || emphasizedTitle)[1])}</h4>`);
+      continue;
+    }
+    if (boldLine) {
+      out.push(`<div class="script-scene-heading">${renderInlineMarkdown(boldLine[1])}</div>`);
+      continue;
     }
 
-    const sceneHeading = boldLine;
-    if (sceneHeading) {
-      return `<div class="script-scene-heading">${renderInlineMarkdown(sceneHeading[1])}</div>`;
+    // 대사(이름-헤더형): "이름"만 있는 줄 → 뒤따르는 줄들이 그 인물의 대사(빈 줄·지문·다음 화자 전까지)
+    if (names) {
+      const bare = _stripTrailingParen(core);
+      const sufMatch = core.match(/([(（][^)）]*[)）])\s*$/);
+      if (names.has(bare)) {
+        const speech = [];
+        let j = i + 1;
+        while (j < lines.length) {
+          const t2 = _unwrapStars(lines[j].trim());
+          if (!t2 || /^[(（].*[)）]$/.test(t2) || matchColonDialogue(t2, names) || names.has(_stripTrailingParen(t2))) break;
+          speech.push(lines[j].trim());
+          j++;
+        }
+        if (speech.length) {
+          out.push(dialogueHtml(bare, sufMatch ? sufMatch[1] : "", speech.join("\n")));
+          i = j - 1;
+          continue;
+        }
+      }
     }
-    return `<div class="script-line">${renderInlineMarkdown(line)}</div>`;
+
+    out.push(`<div class="script-line">${renderInlineMarkdown(line)}</div>`);
+  }
+  return out.join("");
+}
+
+// ── 대본을 씬 단위로 분할/직렬화 (프론트 전용 뷰 — episode.script 원본 텍스트는 그대로 두고
+//    화면에서만 씬 카드로 쪼갠다. 세그먼트 text를 "\n"으로 다시 이어붙이면 원본과 정확히
+//    일치하므로(연속 슬라이스) 저장 시 다운스트림 파서를 깨지 않는다). ──
+function isSceneHeaderLine(line) {
+  const t = line.trim();
+  if (!t) return false;
+  if (/^\*{1,2}\s*\d+\s*[.)]\s*.+\*{1,2}$/.test(t)) return true;    // *1. [...]*  /  **1) ...**
+  if (/^\d+\s*[.)]\s+\S/.test(t)) return true;                       // 1. 편의점 / 밤 11시
+  if (/^(■\s*)?(씬|장면|scene)\s*#?\s*\d+/i.test(t)) return true;     // 씬3 / SCENE 3 / ■ 씬3
+  return false;
+}
+
+function parseScriptSegments(text) {
+  const lines = String(text || "").split("\n");
+  const headers = [];
+  lines.forEach((l, i) => { if (isSceneHeaderLine(l)) headers.push(i); });
+  const segs = [];
+  if (!headers.length) {
+    segs.push({ type: "scene", text: lines.join("\n"), num: 1, header: "" });
+    return segs;
+  }
+  if (headers[0] > 0) {
+    segs.push({ type: "preamble", text: lines.slice(0, headers[0]).join("\n"), header: "" });
+  }
+  headers.forEach((start, k) => {
+    const end = k + 1 < headers.length ? headers[k + 1] : lines.length;
+    segs.push({ type: "scene", text: lines.slice(start, end).join("\n"), num: k + 1, header: lines[start].trim() });
+  });
+  return segs;
+}
+
+function serializeSegments(segs) {
+  return segs.map((s) => s.text).join("\n");
+}
+
+// 씬 헤더를 prefix(마크·번호·"씬N") + title(로케이션/시간) + suffix(닫는 마크)로 분해.
+// 헤더를 편집할 때 title만 갈아끼우고 prefix/suffix를 붙여 원본 포맷(*1. …*)을 보존한다.
+function splitSceneHeader(header) {
+  let s = String(header || ""), prefix = "", suffix = "";
+  const lead = s.match(/^\*{1,2}/); if (lead) { prefix = lead[0]; s = s.slice(lead[0].length); }
+  const trail = s.match(/\*{1,2}$/); if (trail) { suffix = trail[0]; s = s.slice(0, s.length - trail[0].length); }
+  const num = s.match(/^\s*\d+\s*[.)]\s*/); if (num) { prefix += num[0]; s = s.slice(num[0].length); }
+  const sc = s.match(/^(■\s*)?(씬|장면|scene)\s*#?\s*\d+\s*[.)\-]?\s*/i); if (sc) { prefix += sc[0]; s = s.slice(sc[0].length); }
+  return { prefix, title: s.trim(), suffix };
+}
+function sceneHeaderTitle(header) { return splitSceneHeader(header).title; }
+
+// 편집(자동저장)이 인덱스로 참조하는 씬 세그먼트 모델. renderScriptScenes가 매 렌더마다 갱신하고,
+// saveSceneEdit는 재파싱 대신 이 모델을 수정→직렬화한다(편집 중 카드 재렌더 없이 인덱스 안정).
+let scriptSegsModel = [];
+
+function renderScriptScenes(text, locked, names) {
+  const segs = parseScriptSegments(text);
+  scriptSegsModel = segs;
+  const hasContent = segs.some((s) => s.text.trim());
+  if (!hasContent && locked) return '<div class="script-empty">(아직 없음)</div>';
+  return segs.map((s, i) => {
+    // 타이틀/도입부(preamble)는 카드로 표시하지 않는다(원문에는 그대로 남아 라운드트립엔 영향 없음).
+    // data-seg 인덱스가 어긋나지 않도록 i는 그대로 두고 빈 문자열만 반환.
+    if (s.type !== "scene") return "";
+    const label = `씬 ${s.num}`;
+    const title = sceneHeaderTitle(s.header);
+    // 헤더 줄이 있으면 카드 헤더에서 보여주므로 본문에선 첫 줄(헤더) 제외
+    const bodyText = s.header ? s.text.split("\n").slice(1).join("\n") : s.text;
+    // 헤더(로케이션/시간): 확정=읽기전용, 미확정+헤더있음=바로 편집 input(원본 *N.…* 포맷은 저장 시 보존)
+    const headerNode = (!locked && s.header)
+      ? `<input class="scene-header-input" data-seg="${i}" value="${escapeHtml(title)}" placeholder="로케이션 / 시간" spellcheck="false">`
+      : `<span class="scene-title">${escapeHtml(title)}</span>`;
+    // 확정(잠금)=대사/지문 스타일 읽기전용 · 미확정(기본)=본문을 바로 편집하는 textarea(버튼 없이 자동저장)
+    let body;
+    if (locked) {
+      body = renderScriptMarkdown(bodyText, names);
+    } else {
+      const rows = Math.min(40, Math.max(3, bodyText.split("\n").length));
+      body = `<textarea class="scene-edit-area" data-seg="${i}" rows="${rows}" spellcheck="false"`
+        + ` placeholder="대본을 입력하거나 🤖 AI 생성을 사용하세요">${escapeHtml(bodyText)}</textarea>`;
+    }
+    return `<div class="scene-card" data-seg="${i}">
+        <div class="scene-card-head">
+          <button type="button" class="scene-collapse-btn" data-seg="${i}" aria-expanded="true">
+            <span class="scene-caret" aria-hidden="true">▾</span>
+            <span class="scene-num">${label}</span>
+          </button>
+          ${headerNode}
+        </div>
+        <div class="scene-card-body">${body}</div>
+      </div>`;
   }).join("");
 }
 
@@ -82,14 +260,21 @@ function _noteBox(noteInputId) {
   return $(noteInputId + "Box") || $(noteInputId);
 }
 
-function revealNoteThenProceed(noteInputId) {
+// "🤖 AI 생성" 진입점. 툴팁이 닫혀 있으면 열고 대기(null 반환 — 호출자는 그냥 return).
+// 이미 열려 있으면(두 번째 클릭 또는 툴팁 안 "생성") 의견값을 읽어 반환하면서 ★툴팁을 즉시 닫는다★
+// (값은 반환값으로 넘어가니 입력칸을 비워도 안전). 이후 호출자가 버튼을 "생성 중…"으로 바꾼다.
+function beginAiGen(noteInputId) {
   const box = _noteBox(noteInputId);
+  const input = $(noteInputId);
   if (box.classList.contains("hidden")) {
     box.classList.remove("hidden");
-    $(noteInputId).focus();
-    return false;
+    input.focus();
+    return null;
   }
-  return true;
+  const note = input.value.trim();
+  input.value = "";
+  box.classList.add("hidden");
+  return note;
 }
 
 // AI 생성 성공 후(또는 "취소" 클릭 시) 툴팁을 닫고 입력했던 의견을 지운다(다음에 열었을 때
@@ -109,7 +294,7 @@ document.addEventListener("click", (e) => {
   const submitBtn = e.target.closest(".gen-note-submit-btn");
   if (submitBtn) {
     // 실제 생성 로직은 바깥 "🤖 AI 생성" 버튼 핸들러에 있다 — 툴팁이 이미 펼쳐진 상태이므로
-    // revealNoteThenProceed가 즉시 true를 반환해 그대로 생성으로 진행된다(중복 구현 방지).
+    // beginAiGen이 의견값을 반환하며 툴팁을 닫고 그대로 생성으로 진행된다(중복 구현 방지).
     $(submitBtn.dataset.trigger).click();
   }
 });
@@ -346,6 +531,9 @@ async function loadKeySceneImage(keyScene, imgBoxEl, characterImages) {
 
 function renderPitchCard(card) {
   currentCard = card;
+  // ★2026-07-23(온보딩 B): 기획 확정(finalize) 시 서버가 작품을 만들고 project_id를 실어 준다.
+  // 그 id를 잡아두면 '스튜디오로 이동'이 새로 만들지 않고 이 작품으로 진입/갱신한다(재생성도 동일 id).
+  if (card && card.project_id) studioProjectId = card.project_id;
   editing = false;
   $("loglineDisplay").textContent = card.logline;
   $("loglineDisplay").classList.remove("hidden");
@@ -641,7 +829,8 @@ $("saveSynopsisBtn").addEventListener("click", async () => {
 
 $("genSynopsisBtn").addEventListener("click", async () => {
   if (!studioProjectId) return;
-  if (!revealNoteThenProceed("synopsisNoteInput")) return;
+  const note = beginAiGen("synopsisNoteInput");
+  if (note === null) return;
   const btn = $("genSynopsisBtn");
   const original = btn.textContent;
   btn.disabled = true;
@@ -651,14 +840,13 @@ $("genSynopsisBtn").addEventListener("click", async () => {
     const res = await fetch(`${base}/api/studio/${studioProjectId}/generate-synopsis`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ note: $("synopsisNoteInput").value.trim() }),
+      body: JSON.stringify({ note }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
     }
     renderStudio(await res.json());
-    hideNote("synopsisNoteInput");
   } catch (e) {
     alert(`전체 줄거리 AI 생성 실패: ${e.message}`);
   } finally {
@@ -725,7 +913,10 @@ function renderEpisodeDetail() {
   }
 
   $("episodeDetailSummary").textContent = ep.summary || "(아직 없음)";
-  $("episodeDetailScript").innerHTML = renderScriptMarkdown(ep.script);
+  const locked = isScriptConfirmed();
+  const names = buildNameSet(currentStudioProject.characters);
+  $("episodeDetailScript").innerHTML = renderScriptScenes(ep.script, locked, names);
+  applyScriptLock(locked);
 }
 
 function openEpisodeDetail(num) {
@@ -735,7 +926,6 @@ function openEpisodeDetail(num) {
   // 편집 모드 초기화(다른 화 열 때 이전 편집 상태가 남지 않게)
   exitSubtitleEdit();
   exitSummaryEdit();
-  exitScriptEdit();
   renderEpisodeDetail();
   showView("episodeDetail");
 }
@@ -1202,7 +1392,8 @@ $("saveSummaryBtn").addEventListener("click", async () => {
   } catch (e) { alert(`요약 저장 실패: ${e.message}`); }
 });
 $("genSummaryBtn").addEventListener("click", async () => {
-  if (!revealNoteThenProceed("summaryNoteInput")) return;
+  const note = beginAiGen("summaryNoteInput");
+  if (note === null) return;
   const btn = $("genSummaryBtn");
   btn.disabled = true;
   const original = btn.textContent;
@@ -1214,7 +1405,7 @@ $("genSummaryBtn").addEventListener("click", async () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note: $("summaryNoteInput").value.trim() }),
+        body: JSON.stringify({ note }),
       }
     );
     if (!res.ok) {
@@ -1223,32 +1414,14 @@ $("genSummaryBtn").addEventListener("click", async () => {
     }
     await loadStudio(studioProjectId);
     renderEpisodeDetail();
-    hideNote("summaryNoteInput");
   } catch (e) { alert(`요약 AI 생성 실패: ${e.message}`); }
   finally { btn.disabled = false; btn.textContent = original; }
 });
 
-// ── 대본 (수정 / AI 생성) ──
-function exitScriptEdit() {
-  $("episodeScriptEdit").classList.add("hidden");
-  $("scriptEditActions").classList.add("hidden");
-  $("episodeDetailScript").classList.remove("hidden");
-}
-$("editScriptBtn").addEventListener("click", () => {
-  $("episodeScriptEdit").value = currentEpisode().script || "";
-  $("episodeDetailScript").classList.add("hidden");
-  $("episodeScriptEdit").classList.remove("hidden");
-  $("scriptEditActions").classList.remove("hidden");
-});
-$("cancelScriptBtn").addEventListener("click", exitScriptEdit);
-$("saveScriptBtn").addEventListener("click", async () => {
-  try {
-    await patchEpisode({ script: $("episodeScriptEdit").value.trim() });
-    exitScriptEdit();
-  } catch (e) { alert(`대본 저장 실패: ${e.message}`); }
-});
+// ── 대본 (AI 생성) — 수정은 씬 카드에서 바로(버튼 없이 자동저장), 별도 편집 버튼 없음 ──
 $("genScriptBtn").addEventListener("click", async () => {
-  if (!revealNoteThenProceed("scriptNoteInput")) return;
+  const note = beginAiGen("scriptNoteInput");
+  if (note === null) return;
   const btn = $("genScriptBtn");
   btn.disabled = true;
   const original = btn.textContent;
@@ -1260,7 +1433,7 @@ $("genScriptBtn").addEventListener("click", async () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note: $("scriptNoteInput").value.trim() }),
+        body: JSON.stringify({ note }),
       }
     );
     if (!res.ok) {
@@ -1269,9 +1442,176 @@ $("genScriptBtn").addEventListener("click", async () => {
     }
     await loadStudio(studioProjectId);
     renderEpisodeDetail();
-    hideNote("scriptNoteInput");
   } catch (e) { alert(`대본 AI 생성 실패: ${e.message}`); }
   finally { btn.disabled = false; btn.textContent = original; }
+});
+
+// ── 대본 씬 카드: 접기/펴기 + 본문·헤더 바로 편집(자동저장) ──
+// 값이 바뀐 채 포커스가 빠지면(change) 자동 저장한다. 저장은 서버 PATCH + currentStudioProject
+// 갱신까지만 하고 ★대본 카드는 재렌더하지 않아★ 편집 흐름(펼침/커서/다른 씬 입력)을 보존한다.
+async function persistScript(flashEl) {
+  const base = getApiBase();
+  const res = await fetch(
+    `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ script: serializeSegments(scriptSegsModel) }) }
+  );
+  if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+  await loadStudio(studioProjectId);   // 원문 갱신(재렌더는 안 함)
+  flashSaved(flashEl);
+}
+
+// 본문 편집 저장 — 헤더 줄은 그대로 두고 본문만 교체
+async function saveSceneEdit(ta) {
+  const seg = scriptSegsModel[Number(ta.dataset.seg)];
+  if (!seg) return;
+  const origBody = seg.header ? seg.text.split("\n").slice(1).join("\n") : seg.text;
+  if (ta.value === origBody) return;   // 변경 없음
+  seg.text = seg.header ? seg.text.split("\n")[0] + "\n" + ta.value : ta.value;
+  try { await persistScript(ta); } catch (e) { alert(`대본 저장 실패: ${e.message}`); }
+}
+
+// 헤더(로케이션/시간) 편집 저장 — title만 갈아끼우고 원본 prefix/suffix(*N.…* 등)는 보존
+async function saveSceneHeader(input) {
+  const seg = scriptSegsModel[Number(input.dataset.seg)];
+  if (!seg || !seg.header) return;
+  const parts = seg.text.split("\n");
+  const cur = splitSceneHeader(parts[0]);
+  const newTitle = input.value.trim();
+  if (newTitle === cur.title) return;   // 변경 없음
+  parts[0] = cur.prefix + newTitle + cur.suffix;
+  seg.text = parts.join("\n");
+  seg.header = parts[0].trim();
+  try { await persistScript(input); } catch (e) { alert(`씬 헤더 저장 실패: ${e.message}`); }
+}
+
+function flashSaved(el) {
+  const card = el.closest(".scene-card");
+  if (!card) return;
+  card.classList.add("scene-saved");
+  setTimeout(() => card.classList.remove("scene-saved"), 1200);
+}
+
+$("episodeDetailScript").addEventListener("click", (e) => {
+  const collapseBtn = e.target.closest(".scene-collapse-btn");
+  if (!collapseBtn) return;
+  const card = collapseBtn.closest(".scene-card");
+  const collapsed = card.classList.toggle("collapsed");
+  collapseBtn.setAttribute("aria-expanded", String(!collapsed));
+});
+$("episodeDetailScript").addEventListener("change", (e) => {
+  const ta = e.target.closest(".scene-edit-area");
+  if (ta) { saveSceneEdit(ta); return; }
+  const hi = e.target.closest(".scene-header-input");
+  if (hi) saveSceneHeader(hi);
+});
+
+// ── 대본 확정(잠금): "이 대본으로 확정" → 편집 잠금(분량 측정 기준). 상태는 브라우저 로컬에
+//    화별로 저장(백엔드 미변경 = 서버 리로드/job 영향 없음). "해제"로 되돌릴 수 있다. ──
+function scriptLockKey() { return `drama:scriptConfirmed:${studioProjectId}:${currentEpisodeNum}`; }
+function isScriptConfirmed() { return localStorage.getItem(scriptLockKey()) === "1"; }
+function setScriptConfirmed(v) {
+  if (v) localStorage.setItem(scriptLockKey(), "1");
+  else localStorage.removeItem(scriptLockKey());
+}
+
+function applyScriptLock(locked) {
+  if (typeof locked === "undefined") locked = isScriptConfirmed();
+  // 확정 상태면 AI 생성 숨김(재생성 차단). 씬 편집칸은 renderScriptScenes가 locked면 읽기전용으로 렌더.
+  $("genScriptBtn").classList.toggle("hidden", locked);
+  if (locked) hideNote("scriptNoteInput");
+  // 확정 버튼 ↔ 확정됨 표시/해제 토글
+  $("confirmScriptBtn").classList.toggle("hidden", locked);
+  $("scriptConfirmedNote").classList.toggle("hidden", !locked);
+  $("unlockScriptBtn").classList.toggle("hidden", !locked);
+  $("episodeDetailScript").classList.toggle("locked", locked);
+}
+
+$("confirmScriptBtn").addEventListener("click", runDurationGate);
+$("unlockScriptBtn").addEventListener("click", () => {
+  setScriptConfirmed(false);
+  renderEpisodeDetail();
+});
+
+// ── 분량 게이트: [확정] → 스켈레톤으로 화 러닝타임 측정(90~120초). 벗어나면 AI 자동맞춤 제안. ──
+//    측정=measure-duration(스켈레톤 LLM 1회), 자동맞춤=autofit-duration(compress|expand|split).
+function gateChatBox() { return $("durationGateChat"); }
+function gateShow(html) { const b = gateChatBox(); b.classList.remove("hidden"); b.innerHTML = html; }
+function gateHide() { const b = gateChatBox(); b.classList.add("hidden"); b.innerHTML = ""; }
+
+async function gatePost(path, body) {
+  const r = await fetch(`${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/${path}`,
+    { method: "POST", headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : null });
+  if (!r.ok) throw new Error(((await r.json().catch(() => ({}))).detail) || "요청 실패");
+  return r.json();
+}
+
+function gateBubble(msg, buttons) {
+  const btns = (buttons || []).map(b =>
+    `<button type="button" class="gate-btn ${b.primary ? "primary" : ""}" data-act="${b.act}">${b.label}</button>`).join("");
+  return `<div class="gate-bubble"><p>${msg}</p>${btns ? `<div class="gate-actions">${btns}</div>` : ""}</div>`;
+}
+
+function gateScenes(m) { return (m.scenes || []).map(s => `씬${s.num} ${s.seconds}초`).join(" · "); }
+
+async function runDurationGate() {
+  gateShow(gateBubble("⏳ 대본으로 분량을 재는 중… (스켈레톤 생성, 몇 초 걸려요)"));
+  try {
+    renderGateVerdict(await gatePost("measure-duration"));
+  } catch (e) {
+    gateShow(gateBubble("분량 측정에 실패했어요 😢 잠시 후 [이 대본으로 확정]을 다시 눌러줘요.",
+      [{ act: "close", label: "닫기" }]));
+  }
+}
+
+function renderGateVerdict(m) {
+  if (m.verdict === "ok") {
+    gateShow(gateBubble(`✅ 분량 약 <b>${m.total}초</b> — 권장 ${m.min}~${m.max}초 안에 들어와요. 이 대본으로 확정할게요!`));
+    setScriptConfirmed(true);
+    setTimeout(() => { gateHide(); renderEpisodeDetail(); }, 1200);
+    return;
+  }
+  if (m.verdict === "over") {
+    gateShow(gateBubble(
+      `지금 대본은 약 <b>${m.total}초</b>예요 (권장 ${m.min}~${m.max}초보다 길어요).<br><small>${gateScenes(m)}</small><br>제가 약 ${m.target}초로 <b>압축</b>해드릴까요?`,
+      [{ act: "compress", label: "👌 압축해줘", primary: true }, { act: "confirm-anyway", label: "그냥 이대로 확정" }]));
+  } else {
+    gateShow(gateBubble(
+      `지금 대본은 약 <b>${m.total}초</b>로 좀 짧아요 (권장 ${m.min}~${m.max}초).<br><small>${gateScenes(m)}</small><br>제가 약 ${m.target}초로 <b>늘려</b>드릴까요?`,
+      [{ act: "expand", label: "👌 늘려줘", primary: true }, { act: "confirm-anyway", label: "그냥 이대로 확정" }]));
+  }
+}
+
+async function gateAutofit(mode) {
+  gateShow(gateBubble(mode === "split" ? "⏳ 두 화로 나누는 중…"
+    : mode === "expand" ? "⏳ 대본을 늘리는 중…" : "⏳ 대본을 압축하는 중…"));
+  try {
+    const res = await gatePost("autofit-duration", { mode });
+    await loadStudio(studioProjectId);   // 조정된 대본을 에디터에 반영
+    const m = res.measure;
+    if (m.verdict === "ok") {
+      gateShow(gateBubble(`✨ 약 <b>${m.total}초</b>로 맞췄어요! 대본을 업데이트했어요. 이대로 확정할까요?`,
+        [{ act: "confirm-now", label: "✅ 확정", primary: true }, { act: "close", label: "조금 더 볼게요" }]));
+    } else if (m.verdict === "over") {
+      gateShow(gateBubble(`압축해도 약 <b>${m.total}초</b>라 한 화(${m.min}~${m.max}초)엔 좀 길어요.<br>두 화로 <b>나눠서</b> 1화만 쓸까요?`,
+        [{ act: "split", label: "✂️ 나눠줘", primary: true }, { act: "confirm-now", label: "그냥 이대로 확정" }]));
+    } else {
+      gateShow(gateBubble(`조정 후 약 <b>${m.total}초</b>예요. 한 번 더 맞춰볼까요?`,
+        [{ act: "expand", label: "🔁 더 늘려줘", primary: true }, { act: "confirm-now", label: "✅ 이대로 확정" }]));
+    }
+  } catch (e) {
+    gateShow(gateBubble("조정에 실패했어요 😢 다시 시도해줄래요?", [{ act: "close", label: "닫기" }]));
+  }
+}
+
+$("durationGateChat").addEventListener("click", (e) => {
+  const b = e.target.closest(".gate-btn"); if (!b) return;
+  const act = b.dataset.act;
+  if (act === "close") return gateHide();
+  if (act === "confirm-anyway" || act === "confirm-now") {
+    setScriptConfirmed(true); gateHide(); renderEpisodeDetail(); return;
+  }
+  if (act === "compress" || act === "expand" || act === "split") return gateAutofit(act);
 });
 
 // ── 등장인물 추가/삭제 팝업 ──
@@ -1442,7 +1782,8 @@ $("genCharacterBtn").addEventListener("click", async () => {
     alert("이름을 먼저 입력해주세요.");
     return;
   }
-  if (!revealNoteThenProceed("charHintInput")) return;
+  const note = beginAiGen("charHintInput");
+  if (note === null) return;
   const btn = $("genCharacterBtn");
   const original = btn.textContent;
   btn.disabled = true;
@@ -1455,7 +1796,7 @@ $("genCharacterBtn").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name,
-        hint: $("charHintInput").value.trim(),
+        hint: note,
         gender: $("charGenderInput").value,
         age: $("charAgeInput").value.trim(),
         role: $("charRoleInput").value.trim(),
@@ -1476,7 +1817,6 @@ $("genCharacterBtn").addEventListener("click", async () => {
     $("charLineInput").value = f.line || "";
     $("charAppearanceInput").value = f.appearance || "";
     $("charDescriptionInput").value = f.description || "";
-    hideNote("charHintInput");
   } catch (e) {
     alert(`캐릭터 AI 생성 실패: ${e.message}`);
   } finally {
@@ -1492,21 +1832,35 @@ $("goToStudioBtn").addEventListener("click", async () => {
   $("goToStudioBtn").disabled = true;
   try {
     const base = getApiBase();
-    const res = await fetch(`${base}/api/studio/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        idea: currentCard.idea || currentCard.logline,
-        logline: currentCard.logline,
-        characters: currentCard.characters || [],
-        key_scene: currentCard.key_scene || null,
-      }),
-    });
-    if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
-    const { project_id } = await res.json();
-    studioProjectId = project_id;
+    // ★2026-07-23(온보딩 B): 작품은 기획 확정(finalize) 때 이미 생성됨. 여기선 새로 만들지 않고,
+    // 화면에서 편집·생성된 편집분(로그라인·인물 이미지·키장면)만 그 작품에 PATCH로 반영하고 진입한다.
+    // (studioProjectId가 없으면 예외적 폴백으로 생성 — finalize를 안 거친 진입 등)
+    if (studioProjectId) {
+      await fetch(`${base}/api/studio/${studioProjectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          logline: currentCard.logline,
+          characters: currentCard.characters || [],
+          key_scene: currentCard.key_scene || null,
+        }),
+      });
+    } else {
+      const res = await fetch(`${base}/api/studio/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          idea: currentCard.idea || currentCard.logline,
+          logline: currentCard.logline,
+          characters: currentCard.characters || [],
+          key_scene: currentCard.key_scene || null,
+        }),
+      });
+      if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+      studioProjectId = (await res.json()).project_id;
+    }
     saveLastOpen(studioProjectId, null);
-    await loadStudio(project_id);
+    await loadStudio(studioProjectId);
     showView("studio");
   } catch (e) {
     $("errorText").textContent = `요청 실패: ${e.message} (서버 주소 설정을 확인해주세요)`;

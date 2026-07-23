@@ -49,6 +49,46 @@ _load()
 
 _GENDER_EN = {"남": "male", "여": "female", "male": "male", "female": "female"}
 
+# 온보딩 피치카드는 성별·나이를 role에 묶어 내놓는다(예: "남 · 50대 대기업 회장"). 이걸 gender/age
+# 필드로 분리해 role엔 신분/설정만 남긴다(★2026-07-23 버그: "남"이 성별 대신 포지션에 남던 문제).
+_GENDER_TOKEN = {"남자": "남", "여자": "여", "남": "남", "여": "여", "male": "남", "female": "여"}
+_AGE_BAND_RE = re.compile(r"\d0대(?:\s*(?:초반|중반|후반))?")   # "50대", "20대 후반" — 항상 나이대
+_AGE_YEARS_RE = re.compile(r"(\d{1,3})\s*[세살]")             # "53세" — N≥10만 나이(재벌 2세=세대 표기 제외)
+
+
+def _normalize_card_character(ch: dict) -> None:
+    """카드 캐릭터의 role에 묶인 성별·나이를 gender·age 필드로 분리(빈 필드만 채움, role은 나머지 유지)."""
+    if not isinstance(ch, dict):
+        return
+    role = (ch.get("role") or "").strip()
+    if not role:
+        return
+    parts = [p.strip() for p in role.split("·") if p.strip()]
+    if not parts:
+        return
+    if not (ch.get("gender") or "").strip():          # ① 첫 토큰에서 성별 분리
+        head = parts[0]
+        for tok, g in _GENDER_TOKEN.items():
+            if head == tok or head.startswith(tok + " ") or head.startswith(tok + ","):
+                ch["gender"] = g
+                rest = head[len(tok):].strip(" ,")
+                if rest:
+                    parts[0] = rest
+                else:
+                    parts.pop(0)
+                break
+    if not (ch.get("age") or "").strip():             # ② 어느 파트든 나이 표기 분리
+        for i, p in enumerate(parts):
+            m = _AGE_BAND_RE.search(p)
+            if not m:
+                # "재벌 2세" 같은 세대 표기(N<10)는 건너뛰고 N≥10인 실제 나이만
+                m = next((ym for ym in _AGE_YEARS_RE.finditer(p) if int(ym.group(1)) >= 10), None)
+            if m:
+                ch["age"] = m.group(0).strip()
+                parts[i] = (p[:m.start()] + p[m.end():]).strip(" ,")
+                break
+    ch["role"] = " · ".join([p for p in parts if p])
+
 
 def _touch(p: dict) -> None:
     """프로젝트의 수정 시각을 갱신(_LOCK 안에서 호출). 작품 목록 정렬용."""
@@ -369,6 +409,7 @@ def create_project(idea: str, card: dict, owner: str = "") -> str:
     characters = card.get("characters", [])
     for ch in characters:
         ch.setdefault("id", uuid.uuid4().hex)
+        _normalize_card_character(ch)  # role에 묶인 성별·나이를 gender/age로 분리
 
     logline = card.get("logline", "")
     if not idea and not logline and not characters:
@@ -400,15 +441,23 @@ def create_project(idea: str, card: dict, owner: str = "") -> str:
 
 
 def update_project(project_id: str, **fields) -> dict | None:
-    """프로젝트 상위 필드(제목·로그라인·전체 줄거리 등) 수정. 허용된 키만 반영한다."""
-    allowed = {"title", "logline", "synopsis"}
+    """프로젝트 상위 필드 수정. 허용된 키만 반영한다.
+    ★2026-07-23(온보딩 B): characters·key_scene도 허용 — 기획 재생성/스튜디오 이동 시 카드
+    전체(로그라인·인물·키장면)를 기존 작품에 반영한다. characters는 id가 없으면 새로 부여한다."""
+    allowed = {"title", "logline", "synopsis", "characters", "key_scene"}
     with _LOCK:
         p = _PROJECTS.get(project_id)
         if not p:
             return None
         for k, v in fields.items():
-            if k in allowed:
-                p[k] = v
+            if k not in allowed:
+                continue
+            if k == "characters":
+                for ch in (v or []):
+                    if isinstance(ch, dict):
+                        ch.setdefault("id", uuid.uuid4().hex)
+                        _normalize_card_character(ch)  # role에 묶인 성별·나이 분리
+            p[k] = v
         _touch(p)
         _save()
         return dict(p)

@@ -104,9 +104,12 @@ AUTOPILOT_ENABLED = os.environ.get("SB_AUTOPILOT_ENABLED", "true").lower() == "t
 # 수십 분~시간 단위인 것과 맞춰, 2시간으로 상향 — 검사가 생성 속도를 못 따라가 뒷부분이
 # 통째로 미검사되는 일을 줄인다.
 AUTOPILOT_VISION_BUDGET_SEC = int(os.environ.get("SB_AUTOPILOT_VISION_BUDGET_SEC", "7200"))
-OPENROUTER_MUSIC_MODEL = os.environ.get("OPENROUTER_MUSIC_MODEL", "google/lyria-3-clip-preview")
+OPENROUTER_MUSIC_MODEL = os.environ.get("OPENROUTER_MUSIC_MODEL", "google/lyria-3-pro-preview")  # ★2026-07-23 clip-preview가 한국어 가사를 넣어 pro로 교체(인스트루멘탈 지시 준수 기대)
+# ★2026-07-23: 고정 배경음 파일 경로. 지정되면 Lyria 생성을 건너뛰고 이 파일을 배경음으로 쓴다
+# (생성 음악의 가사 리스크 제거 — 검증된 트랙 사용). 비어 있으면 기존대로 Lyria 생성.
+OPENROUTER_MUSIC_FILE = os.environ.get("OPENROUTER_MUSIC_FILE", "")
 OPENROUTER_MUSIC_TIMEOUT = int(os.environ.get("OPENROUTER_MUSIC_TIMEOUT", "120"))
-OPENROUTER_MUSIC_VOLUME_DB = float(os.environ.get("OPENROUTER_MUSIC_VOLUME_DB", "-18"))
+OPENROUTER_MUSIC_VOLUME_DB = float(os.environ.get("OPENROUTER_MUSIC_VOLUME_DB", "-18"))  # ★2026-07-23 배경음 볼륨(-10 큼→-15→살짝 더 줄여 -18)
 
 # 샷 분해 등 LLM(HTTP) — agent(claude CLI) 대신 OpenRouter chat으로 돌려 느림·동시호출 충돌 회피
 OPENROUTER_LLM_MODEL = os.environ.get("OPENROUTER_LLM_MODEL", "anthropic/claude-sonnet-4.5")

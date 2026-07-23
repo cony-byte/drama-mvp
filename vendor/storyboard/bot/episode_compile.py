@@ -143,21 +143,33 @@ def _build_music_track(mood_prompt: str | None, total_duration: float,
     Lyria 3 배경음악을 생성, 영상 전체 길이에 맞춰 반복(loop)+트림하고 볼륨을 낮춘
     (config.OPENROUTER_MUSIC_VOLUME_DB) wav로 반환. 실패해도 None만 반환하고 예외를 밖으로
     던지지 않는다 — 배경음악은 비필수 기능이라 실패해도 합본 자체는 계속 진행돼야 한다."""
-    if not mood_prompt or not music.available():
+    # ★2026-07-23: 고정 배경음 파일(config.OPENROUTER_MUSIC_FILE)이 있으면 Lyria 생성을 건너뛰고
+    # 그 파일을 쓴다 — 생성 음악이 지시를 무시하고 가사를 넣는 문제를 원천 차단(검증된 트랙 사용).
+    fixed = (getattr(config, "OPENROUTER_MUSIC_FILE", "") or "").strip()
+    src = None
+    if fixed and Path(fixed).exists():
+        src = fixed
+    elif mood_prompt and music.available():
+        try:
+            mp3 = music.generate(mood_prompt, timeout=config.OPENROUTER_MUSIC_TIMEOUT)
+            mp3_path = tmpdir / "music_raw.mp3"
+            mp3_path.write_bytes(mp3)
+            src = str(mp3_path)
+        except Exception:
+            log.exception(f"배경음악 생성 실패, 배경음악 없이 진행: {mood_prompt[:80]!r}")
+            return None
+    if not src:
         return None
     try:
-        mp3 = music.generate(mood_prompt, timeout=config.OPENROUTER_MUSIC_TIMEOUT)
-        mp3_path = tmpdir / "music_raw.mp3"
-        mp3_path.write_bytes(mp3)
         out_path = tmpdir / "music.wav"
-        # Lyria 클립이 영상보다 짧을 수 있어 -stream_loop -1로 반복시킨 뒤 total_duration으로
-        # 잘라내고, 대사보다 한참 낮은 볼륨으로 깐다.
-        _run([config.FFMPEG_BIN, "-y", "-stream_loop", "-1", "-i", str(mp3_path),
+        # 음원이 영상보다 짧을 수 있어 -stream_loop -1로 반복시킨 뒤 total_duration으로 잘라내고,
+        # 대사보다 한참 낮은 볼륨으로 깐다.
+        _run([config.FFMPEG_BIN, "-y", "-stream_loop", "-1", "-i", src,
              "-af", f"volume={config.OPENROUTER_MUSIC_VOLUME_DB}dB",
              "-t", f"{total_duration:.3f}", str(out_path)], timeout=config.COMPILE_TIMEOUT)
         return out_path
     except Exception:
-        log.exception(f"배경음악 생성/처리 실패, 배경음악 없이 진행: {mood_prompt[:80]!r}")
+        log.exception("배경음악 처리 실패, 배경음악 없이 진행")
         return None
 
 
@@ -249,6 +261,11 @@ def _render(work: str, plan: list[dict], out_path: Path, tmpdir: Path, *,
         next_seg = plan[i + 1] if i + 1 < len(plan) else None
         if next_seg and next_seg.get("transition_in") == "fade":
             vf += f",fade=t=out:st={max(0, dur - fd):.2f}:d={fd:.2f}"
+        # ★2026-07-23: seg에 fade_out(초)이 지정되면 그 컷 끝을 검정으로 페이드아웃(엔딩 암전 등).
+        # 다음 컷 유무와 무관 — 마지막 컷을 부드럽게 암전시키는 데 쓴다.
+        if seg.get("fade_out"):
+            fo = min(float(seg["fade_out"]), dur)
+            vf += f",fade=t=out:st={max(0, dur - fo):.2f}:d={fo:.2f}"
         # ★2026-07-15 "개별 컷은 소리가 나오는데 합본에서 소리가 안 나옴" 픽스: 이 -an은
         # concat용 비디오 트랙에서만 오디오를 뺀다(코덱 통일을 위해 그대로 둠) — 예전엔
         # OPENROUTER_VIDEO_GENERATE_AUDIO가 기본 False라 컷 자체에 오디오가 없어서 -an으로
