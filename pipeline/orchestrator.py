@@ -651,22 +651,28 @@ def ensure_scene_references(work: str, scene: dict, mood: str = "",
     return fix_element_references(work, mood=mood, conti_full=conti_body, only=displays)
 
 
-def _design_costume(character: dict, scene: dict, mood: str = "") -> str:
+def _design_costume(character: dict, scene: dict, mood: str = "", stated: str = "") -> str:
     """캐릭터(외모·신분/성격)와 장면 배경에 어울리는 '평상 의상' 한 벌을 구체적 시각 묘사(색·상/하의·
     소재·핏·디테일)로 설계해 한국어 한두 문장으로 반환한다. 참조 이미지 생성 context 및 의상 설명으로
-    쓰인다. 실패하면 빈 문자열(호출부가 무난한 기본 디자인으로 폴백)."""
+    쓰인다. 실패하면 빈 문자열(호출부가 무난한 기본 디자인으로 폴백).
+    ★2026-07-23: stated(콘티가 지정한 의상 개념 — 예 '편의점 유니폼')가 있으면 그걸 지어내지 말고
+    구체 시각 묘사로 '살(구체화)'만 붙인다 — 콘티 의도를 무시하고 딴 옷을 설계하던 문제 방지."""
     name = character.get("name") or "인물"
     appearance = (character.get("appearance") or "").strip()
     desc = (character.get("description") or "").strip()
     setting = scene.get("location_tag") or ""
+    stated = (stated or "").strip()
     system = (
         "너는 숏폼 드라마 의상 스타일리스트다. 주어진 인물과 장면에 자연스럽게 어울리는 평상 의상 "
         "한 벌을 골라, 옷만 구체적인 시각 묘사로 답한다. 상의·하의(또는 원피스)·색·소재·핏·눈에 "
         "띄는 디테일을 담되 한국어 1~2문장(짧게)으로만, 따옴표·군더더기 없이 옷 묘사만 낸다. "
         "인물의 신분·직업·성격과 장면 배경에 맞춰라(예: 편의점 알바생=근무 유니폼, 신분 숨긴 재벌가 "
-        "인물=고급스럽지만 튀지 않는 미니멀 캐주얼). 얼굴·헤어·표정은 절대 언급하지 마라 — 옷만.")
+        "인물=고급스럽지만 튀지 않는 미니멀 캐주얼). 얼굴·헤어·표정은 절대 언급하지 마라 — 옷만. "
+        "★지정된 의상 개념이 주어지면 그것을 다른 옷으로 바꾸지 말고, 그 개념을 구체적인 색·소재·"
+        "핏·디테일로 구체화만 하라.")
+    stated_line = f"지정된 의상 개념: {stated}\n" if stated else ""
     user = (f"인물: {name}\n외모: {appearance or '미상'}\n신분/성격: {desc or '미상'}\n"
-            f"장면 배경: {setting or '미상'}\n작품 톤: {mood or '미상'}\n\n"
+            f"장면 배경: {setting or '미상'}\n작품 톤: {mood or '미상'}\n{stated_line}\n"
             "이 인물이 이 장면에서 입을 의상 한 벌을 묘사해줘.")
     try:
         out = " ".join(_cw_complete(system, user).split()).strip().strip('"' + "'")
@@ -690,14 +696,20 @@ def ensure_scene_costumes(work: str, scene: dict, characters: list[dict] | None 
         costume = c.get("costume") or ""
         if not name or (costume and "미등록" not in costume):
             continue  # 이름 없음 또는 이미 등록 의상 있음 → 건드리지 않음
+        # 콘티가 말한 의상 개념(예: '편의점 유니폼') — '⚠ 미등록' 플래그만 떼고 설계 근거로 넘긴다.
+        stated = costume.replace("⚠", "").replace("미등록", "").strip()
         label = f"{name} 의상"
         existing = oi.resolve_element(work, label)
-        if existing and oi.element_has_image(work, existing):
+        # ★2026-07-23 회귀 수정: resolve_element가 '강태민 의상'을 person 요소 '강태민'에 부분일치
+        # 시켜, 의상이 이미 있다고 착각하고 설계를 건너뛰던 버그(인물을 person으로 되돌린 뒤 발생).
+        # 재사용은 실제 costume 타입일 때만 — person이 물리면 무시하고 진짜 의상을 설계·등록한다.
+        if existing and existing.get("type") == "costume" and oi.element_has_image(work, existing):
             c["costume"] = existing.get("display") or label  # 이전 씬에서 만든 의상 재사용
             reused += 1
             continue
         try:
-            design = _design_costume(char_by_name.get(name) or {"name": name}, scene, mood=mood)
+            design = _design_costume(char_by_name.get(name) or {"name": name}, scene,
+                                     mood=mood, stated=stated)
             el = oi.register_element(work, label, etype="costume")
             if design:  # 의상 설명을 요소에 저장(WARDROBE LOCK·비전 후검사 근거)
                 try:
@@ -713,7 +725,9 @@ def ensure_scene_costumes(work: str, scene: dict, characters: list[dict] | None 
             _register_element_image(work, label, "costume", png)
             c["costume"] = label
             designed += 1
-        except Exception:
+        except Exception as e:
+            log.exception("미등록 의상 자동 설계·등록 실패 (씬%s %s): %s",
+                          scene.get("scene_num"), name, e)
             failed += 1
     return {"designed": designed, "reused": reused, "failed": failed}
 
@@ -741,17 +755,50 @@ def _name_in_target(name: str, target: str) -> bool:
     return len(name) >= 3 and name[1:] in target  # 성(1글자) 뗀 이름(이수진→수진)
 
 
-def _block_participants(scene: dict, block: dict | None) -> list[str] | None:
-    """이 블록에 확실히 '단독'으로 등장하는 1인만 반환. 그 외(2인·위주·OTS·인서트·파싱 실패)는
-    None을 반환해 호출부가 전체 cast로 폴백하게 한다 — 위주/걸침·OTS는 상대도 프레임에 보이므로
-    함부로 줄이면 필요한 인물을 떨어뜨린다. '단독' 컷에서만, 이름이 정확히 1명 매칭될 때 좁힌다."""
+def _block_participants(scene: dict, block: dict | None) -> list[str]:
+    """이 컷 프레임에 '실제로 있는' 인물 이름 목록. ★2026-07-23(사용자 지시): 전체 cast 폴백을
+    없앤다 — 그 컷에 이름이 실제로 나온 인물만 붙인다. 예전엔 대상 파싱 실패(인서트·대상 누락)나
+    2인외 케이스에서 씬 cast 전체로 폴백해, 수진 단독/수진 손 인서트 컷에도 태민 참조·등장 라인이
+    딸려가 '없어야 할 태민'이 프레임에 등장했다(실측 컷1·컷25).
+
+    판정: ① 구도 대상(헤더 마지막 '/' 구간)에 적힌 인물만 우선 채택 — '단독'=1인, '위주(○ 걸침)'=
+    걸침 인물까지 둘 다 명시되니 함께 잡힘. ② 대상이 '2인'이면 전체 cast. ③ 대상에 인물명이 없으면
+    (사물 인서트 / 대상 누락) 프레임 '안' 자세에서 스캔한다 — 괄호 주석(프레임 밖·시선 참고 대상)은
+    제거해 오탐(화면 밖 인물이 시선 대상으로 딸려오는 것) 방지. 아무도 안 나오면 [](인물 0명).
+    항상 목록을 반환하며(None 없음), 호출부는 이 목록으로 참조 cast·스틸 등장 라인을 함께 좁힌다."""
     cast_names = [c.get("name") for c in (scene.get("cast") or []) if c.get("name")]
-    target = v3_schema.parse_composition_header((block or {}).get("header") or "").get("target") or ""
-    if target.endswith("단독"):
-        present = [n for n in cast_names if _name_in_target(n, target)]
-        if len(present) == 1:
-            return present
-    return None
+    header = (block or {}).get("header") or ""
+    target = header.rsplit("/", 1)[-1].strip()  # 구도 4값 중 넷째(대상). 슬래시 없으면 헤더 전체.
+    named = [n for n in cast_names if _name_in_target(n, target)]
+    if named:
+        return named                       # 대상이 인물을 지목 → 그 인물만(가장 신뢰)
+    if "2인" in target:
+        return cast_names                  # 명시적 2인 대치 → 전체
+    # 대상에 인물명 없음(사물 인서트/대상 누락) → 프레임 안 자세만 스캔(괄호=프레임밖·참고 제거)
+    body = re.sub(r"\([^)]*\)", "", (block or {}).get("text") or "")
+    return [n for n in cast_names if _name_in_target(n, body)]
+
+
+def _block_props(scene: dict, block: dict | None) -> list[str]:
+    """이 컷 프레임에 실제로 나오는 소품만. ★2026-07-23(사용자 지시): 예전엔 씬의 모든 소품
+    (scene_prop_names)을 컷마다 전부 참조로 붙여, 안 나와야 할 컷에도 명함 같은 소품이 계속
+    등장했다. 컷 서술(프레임 안)에 소품 이름이 실제로 나온 것만 붙인다 — 괄호(프레임 밖·참고)는 제외."""
+    prop_names = v3_schema.scene_prop_names(scene)
+    body = re.sub(r"\([^)]*\)", "", (block or {}).get("text") or "")
+    return [p for p in prop_names if p and p in body]
+
+
+def _scene_for_cut(scene: dict, block: dict | None) -> dict:
+    """그 컷에 실제 나오는 인물·소품만 남긴 씬 사본. 스틸·영상 프롬프트의 '등장'·'소품' 선언이
+    컷 밖 인물(태민)·소품(명함)을 흘려 생성기가 없어야 할 대상을 그리는 걸 막는다. ★2026-07-23:
+    스틸(_clip_pseudo_shot)뿐 아니라 영상 모션 프롬프트(clip_motion_prompt)에도 공통 적용 —
+    영상이 스틸(수진만)을 첫 프레임으로 받고도 프롬프트에 '태민'이 남아 인물이 바뀌던 문제."""
+    present = _block_participants(scene, block)
+    cast = [c for c in (scene.get("cast") or []) if c.get("name") in present]
+    present_props = _block_props(scene, block)
+    props_kept = [seg.strip() for seg in re.split(r"\s*[·∙•]\s*", scene.get("props_raw") or "")
+                  if seg.strip() and any(pp in seg for pp in present_props)]
+    return {**scene, "cast": cast, "props_raw": (" · ".join(props_kept) or None)}
 
 
 def _block_focus_char(block: dict | None, cast_names: list[str]) -> str | None:
@@ -788,10 +835,9 @@ def _clip_pseudo_shot(scene: dict, clip: dict, block: dict, work: str | None = N
         지어내 화면 초점 인물(예: 손님 남자)에게 엉뚱한 옷(편의점 유니폼)을 입혔다. 그래서
         (a) '미등록' 의상은 costume에서 버리고, (b) 캐릭터 appearance(옷 서술 포함)를 인물별로
         묶어 appearances로 실어 보낸다 — generate_image_for_shot이 인물↔외모/의상을 못박는다."""
-    cast = scene.get("cast") or []
-    present = _block_participants(scene, block)
-    if present is not None:
-        cast = [c for c in cast if c.get("name") in present]
+    # 이 컷에 실제 있는 인물·소품만 남긴 씬으로 스틸 프롬프트를 만든다(등장/소품 선언 좁히기).
+    scene_for_prompt = _scene_for_cut(scene, block)
+    cast = scene_for_prompt.get("cast") or []
     appearance_by_name = {c.get("name"): (c.get("appearance") or "").strip()
                           for c in (characters or []) if c.get("name")}
     costumes = {}
@@ -814,8 +860,8 @@ def _clip_pseudo_shot(scene: dict, clip: dict, block: dict, work: str | None = N
         "costumes": costumes,
         "appearances": appearances,
         "places": [scene["location_tag"]] if scene.get("location_tag") else [],
-        "props": v3_schema.scene_prop_names(scene),
-        "prompt": sb_prompts.clip_still_prompt(scene, clip, block),
+        "props": _block_props(scene, block),  # 그 컷에 실제 나오는 소품만(명함이 전 컷에 붙던 문제)
+        "prompt": sb_prompts.clip_still_prompt(scene_for_prompt, clip, block),
         "caption": clip.get("label") or "",
     }
 
@@ -874,7 +920,9 @@ def produce_clip(work: str, scene: dict, clip: dict, episode: int = 1,
         except Exception:
             pass  # 스틸 파일 저장 실패해도 메모리의 png로 영상화는 이어감
     try:
-        motion = sb_prompts.clip_motion_prompt(scene, clip)
+        # ★2026-07-23: 영상 모션 프롬프트도 이 컷 참여자·소품만 남긴 씬으로 — 스틸(수진만)을 첫
+        # 프레임으로 주고도 프롬프트에 '태민'이 남아 영상에서 인물이 바뀌던 문제(등장 라인 누수).
+        motion = sb_prompts.clip_motion_prompt(_scene_for_cut(scene, (clip.get("blocks") or [None])[0]), clip)
         path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=episode,
                                        want_audio=_clip_has_dialogue(clip))
     except Exception as e:
@@ -1767,21 +1815,31 @@ def _detect_face_boxes(png: bytes, W: int, H: int) -> list[tuple[int, int, int, 
     return [((W - w) // 2, int(H * 0.06), w, h)]
 
 
+_GRID_CELLS = 5  # 5×5
+
+
 def _facegrid_overlay(png: bytes) -> bytes:
     """image-to-video의 실존인물 안전필터(InputImageSensitiveContentDetected)를 회피하려고
-    화면에 등장하는 사람 전부의 얼굴 영역에 빨간 불투명 박스를 얹는다(2인 이상 등장 컷에서
-    하나만 가리면 남은 얼굴 때문에 필터가 여전히 걸림 — 2026-07-21 실측).
+    화면에 등장하는 사람 전부의 얼굴 영역에 빨간 5×5 격자 선을 얹는다(2인 이상 등장 컷에서
+    하나만 가리면 남은 얼굴 때문에 필터가 여전히 걸림 — 2026-07-21 실측). 얼굴 영역 자체는
+    YOLOv8(person 클래스, 다중 인물)로 안정적으로 감지한다.
 
-    ★2026-07-22: 격자 "선"만으로는 얼굴 대부분이 그대로 노출돼 필터를 못 피하는 게 실측으로
-    확인됨(같은 이미지를 완전 불투명 박스로 덮으니 통과) — 그래서 격자선 대신 감지 영역을
-    완전히 채운다(함수명은 호출부 호환을 위해 유지)."""
+    ★2026-07-22: 이전 실측에선 격자 선만으로 필터를 못 피해 완전 불투명 박스로 바꿨었는데,
+    사용자 지시로 다시 5×5 격자 선으로 되돌림 — 얼굴이 격자 선 사이로 부분적으로 노출되므로
+    불투명 박스보다 안전필터 회피 신뢰도가 낮을 수 있다(그 이전 실측 결과 참고)."""
     from PIL import Image, ImageDraw
     base = Image.open(io.BytesIO(png)).convert("RGBA")
     W, H = base.size
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
+    color = (237, 28, 36, 255)
     for x, y, w, h in _detect_face_boxes(png, W, H):
-        d.rectangle([x, y, x + w, y + h], fill=(237, 28, 36, 255))
+        x0, y0, x1, y1 = x, y, x + w, y + h
+        for i in range(_GRID_CELLS + 1):
+            gx = round(x0 + (x1 - x0) * i / _GRID_CELLS)
+            d.line([(gx, y0), (gx, y1)], fill=color, width=max(2, W // 200))
+            gy = round(y0 + (y1 - y0) * i / _GRID_CELLS)
+            d.line([(x0, gy), (x1, gy)], fill=color, width=max(2, W // 200))
     out = io.BytesIO()
     Image.alpha_composite(base, overlay).convert("RGB").save(out, format="PNG")
     return out.getvalue()
@@ -2411,7 +2469,8 @@ def videoize_cut_job(project: dict, episode: dict, job_id: str, save_fn=None, *,
             scene, clip = _find_v3_scene_clip(episode, scene_num, clip_id)
             if not clip:
                 raise RuntimeError(f"v3 씬{scene_num} 클립 {clip_id}의 콘티를 찾을 수 없어요.")
-            motion = sb_prompts.clip_motion_prompt(scene, clip)
+            # 영상 모션 프롬프트를 이 컷 참여자·소품만 남긴 씬으로(등장 라인 누수로 인물 바뀜 방지)
+            motion = sb_prompts.clip_motion_prompt(_scene_for_cut(scene, (clip.get("blocks") or [None])[0]), clip)
             if note:
                 motion = f"{motion}\n\n[사용자 요청 반영 — 아래 지시를 최우선으로]: {note}"
             path = generate_video_for_clip(work, scene_num, clip_id, png, motion, episode=num,

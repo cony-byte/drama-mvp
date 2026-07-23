@@ -396,6 +396,11 @@ def register_element(work: str, display: str, etype: str = "person",
         if cur is None:
             cur = {"id": uuid.uuid4().hex, "display": display, "aliases": [], "status": "confirmed"}
             elems.append(cur)
+        # ★2026-07-23 인물 우선: 이미 person으로 등록된 요소(얼굴 참조)를 다른 타입(costume/prop/
+        # place)으로 강등하지 않는다 — 콘티 요소 추출(extract_and_register_elements)이 인물명을
+        # costume으로 오분류해 얼굴 앵커가 깨지던 문제 방어. 명시적 person 등록(승격)은 허용.
+        if cur.get("type") == "person" and etype != "person":
+            etype = "person"
         cur["type"] = etype
         # ★2026-07-22(refs 재설계): file 필드 폐지 — 이미지 경로는 id+type에서 계산한다
         #   (save_element_image/_element_file_path). filename/clear_file 인자는 하위호환용으로

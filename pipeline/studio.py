@@ -172,18 +172,21 @@ def _save_character_reference(work: str, character: dict) -> None:
     —이름·성별·나이·외형이 이미지뿐 아니라 목소리에도 일관되게 이어지도록)."""
     image = character.get("image")
     if not image or not image.startswith("data:image"):
-        return
+        return None
     name = character.get("name") or "인물"
     b64 = image.split(",", 1)[1]
     original_png = base64.b64decode(b64)
     # ★2026-07-22: 인물을 person으로 등록(id 획득). 카드 원본 이미지는 <id>_원본.png로 보관하고,
     # 그 원본에서 '얼굴 전용 레퍼런스'(정면·얼굴~어깨 크롭·중립 상의·액세서리 제거·흰 배경)를
     # 만들어 대표 <id>.png로 쓴다(같은 요소 id로 원본↔얼굴레퍼런스 매칭). 중립화 실패 시 원본 폴백.
+    # ★2026-07-23: register_element는 person 우선 가드가 있어, 콘티 추출이 costume으로 강등해뒀던
+    # 동명 요소도 여기서 person으로 되돌린다. 반환한 elem.id를 호출부(lock_character_references)가
+    # 캐릭터의 element_id로 연결한다.
     elem = oi.register_element(work, name, etype="person", aliases=[name])
     # ★2026-07-22: 이미 얼굴 레퍼런스가 있으면 매번 다시 만들지 않는다(재실행마다 img2img 중립화가
     # 반복돼 '인물 기준 이미지 준비 중'이 오래 걸리던 문제). 처음 한 번만 원본 보관 + 중립화.
     if oi.element_has_image(work, elem):
-        return
+        return elem
     oi.save_element_image(work, elem, original_png, variant="원본")
     face_png = _make_face_reference(original_png, character) or original_png
     oi.save_element_image(work, elem, face_png)
@@ -196,6 +199,7 @@ def _save_character_reference(work: str, character: dict) -> None:
                     e["gender"] = gender_en
                     break
             oi._save_elements(work, elems)
+    return elem
 
 
 def lock_character_references(project_id: str) -> dict | None:
@@ -241,12 +245,26 @@ def lock_character_references(project_id: str) -> dict | None:
             _touch(p)
             _save()
 
+    # ★2026-07-23: 얼굴 참조 등록 후, 각 캐릭터를 그 person 엘리먼트에 연결(element_id) — 이전엔
+    # element_id=None이라 인물↔요소가 끊겨 얼굴 앵커가 약했다. 이제 id를 캐릭터에 박아 저장한다.
+    elem_ids: dict[str, str] = {}
     for ch in characters:
         if (ch.get("image") or "").startswith("data:image"):
             try:
-                _save_character_reference(work, ch)
+                elem = _save_character_reference(work, ch)
+                if elem and elem.get("id"):
+                    elem_ids[ch["id"]] = elem["id"]
             except Exception:
                 pass
+    if elem_ids:
+        with _LOCK:
+            p = _PROJECTS.get(project_id)
+            if p:
+                for c in p["characters"]:
+                    if c.get("id") in elem_ids:
+                        c["element_id"] = elem_ids[c["id"]]
+                _touch(p)
+                _save()
 
     return get_project(project_id)
 
