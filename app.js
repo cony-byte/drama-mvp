@@ -466,14 +466,12 @@ async function pollJob(jobId) {
       showView("stills");
       const stills = job.stills || [];
       if (stills.length) {
-        renderStillsList(stills, job.total || stills.length);
-        // 생성 중엔 생성 중인(최신) 씬을 따라가되, 유저가 이전 씬으로 넘겨봤으면(stillsFollow=false) 그대로 둔다.
-        if (job.status !== "done" && stillsFollow) {
-          stillsSceneIndex = _stillsSceneNums().length - 1;   // 생성 중인 최신 씬
-          const sn = _stillsSceneNums()[stillsSceneIndex];
-          stillsCutIndex = Math.max(0, stillsCuts.filter((c) => Number(c.scene_num) === Number(sn)).length - 1); // 최신 컷
-          renderStillsPage();
-        }
+        // ★2026-07-23: 자동 이동 없음 — 새 컷이 생겨도 지금 보는 씬/컷 그대로 유지한다(화면이 맘대로
+        // 안 튀게). 폴링마다 통째로 다시 그리지도 않고, 새 컷이 '실제로 늘었을 때만' 갱신하되
+        // renderStillsPage가 현재 stillsSceneIndex/stillsCutIndex 그대로 렌더 → 위치 안 옮김.
+        const grew = stills.length !== _lastStillsLen;
+        _lastStillsLen = stills.length;
+        if (grew) renderStillsList(stills, job.total || stills.length);
       } else if (job.status !== "done") {
         renderStillsLoading(job.stage || "생성 중…");
       }
@@ -943,7 +941,7 @@ function renderEpisodeDetail() {
 
 function openEpisodeDetail(num) {
   currentEpisodeNum = num;
-  stillsPageIndex = 0; stillsSceneIndex = 0; stillsCutIndex = 0; stillsFollow = true; // 다른 화 열 때 스틸 페이지 처음으로
+  stillsPageIndex = 0; stillsSceneIndex = 0; stillsCutIndex = 0; _lastStillsLen = -1; // 다른 화 열 때 스틸 페이지 처음으로
   saveLastOpen(studioProjectId, num);
   // 편집 모드 초기화(다른 화 열 때 이전 편집 상태가 남지 않게)
   exitSubtitleEdit();
@@ -973,7 +971,7 @@ function startJob(endpoint, mode, prepMsg, query) {
       // ★2026-07-22: 스틸 모드는 별도 진행 화면 없이 곧바로 스틸 뷰(생성 중…)로 — 백엔드
       // 파이프라인(참조 생성·붙이기·상세 콘티 분할)이 도는 동안 폴링이 완성된 컷부터 노출한다.
       if (mode === "stills") {
-        stillsPageIndex = 0; stillsSceneIndex = 0; stillsCutIndex = 0; stillsFollow = true;  // 새 생성 시작 → 생성 중 씬 자동 추적
+        _lastStillsLen = -1;  // 새 생성 시작 — 씬/컷 위치는 유지(자동 이동 안 함, 사용자가 보던 자리 그대로)
         showView("stills");
         renderStillsLoading(prepMsg);
       } else {
@@ -1097,6 +1095,7 @@ let stillsPageIndex = 0;
 let stillsSceneIndex = 0;   // ★2026-07-23 씬 단위 페이지네이션: 현재 보고 있는 씬 페이지(0-based)
 let stillsFollow = true;    // 생성 중 최신(생성 중) 씬을 자동 추적. 유저가 이전/다음으로 넘기면 false → 안 뺏김
 let stillsCutIndex = 0;     // 현재 씬 안에서 보고 있는 컷(스틸) 인덱스 — 씬 안은 예전처럼 한 장씩 페이지네이션
+let _lastStillsLen = -1;    // 폴링 중 스틸 개수 변화 감지 — 새 컷 생겼을 때만 리렌더(화면 튐 방지)
 // 영상화 진행 중인 컷들("scene-cut") — 페이지를 넘겨 카드가 다시 그려져도 "영상화 중" 상태를 유지.
 const videoizingCuts = new Set();
 const cutKey = (scene, cut) => `${scene}-${cut}`;
