@@ -1198,3 +1198,19 @@ button#studioWorksBtnBottom:hover { background: #3d3d3d; }
   margin-bottom: 12px;
 }
 .stills-scene-pager:empty { display: none; }
+
+/* 컷 이동 버튼을 이미지 양옆에(카루셀). 카운터는 이미지 밑 */
+.stills-cut-row { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; }
+.stills-cut-row .still-card { flex: 0 1 auto; }
+.stills-side-btn {
+  flex: 0 0 auto;
+  padding: 14px 8px;
+  font-size: 16px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text);
+}
+.stills-side-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.stills-side-btn[disabled] { opacity: 0.3; cursor: default; }
+.stills-cut-counter { text-align: center; color: var(--muted); font-size: 14px; margin-top: 8px; }
