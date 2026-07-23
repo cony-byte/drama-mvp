@@ -7,7 +7,7 @@ function getApiBase() {
 }
 
 function setApiBase(v) {
-  localStorage.setItem(API_BASE_KEY, v.trim());
+  localStorage.setItem(API_BASE_KEY, v.trim().replace(/\/+$/, ""));
 }
 
 // 마지막으로 연 작품/화를 기억해뒀다가 새로고침해도 그 자리로 돌아간다.
