@@ -1477,14 +1477,11 @@ function applyScriptLock(locked) {
   $("episodeDetailScript").classList.toggle("locked", locked);
   // ★[드라마 만들기]는 확정(locked) 후에만 노출 — 확정 전엔 숨김. 확정하면 [수정]+[드라마 만들기]로 나뉨.
   $("v3PreviewBtn").classList.toggle("hidden", !locked);
-  gateHide();  // ★임시: 스켈레톤 분량 측정 단계 우회(measure-duration 브라우저 실패 조사 중) — 게이트 챗봇 미사용
+  if (locked) gateHide();  // 확정 완료 상태면 게이트 챗봇 정리(측정 OK 버블 등)
 }
 
-// ★임시: [확정]은 분량 측정(measure-duration) 없이 바로 잠금+버튼 노출만. 원인 파악 후 게이트 복원 예정.
-$("confirmScriptBtn").addEventListener("click", () => {
-  setScriptConfirmed(true);
-  renderEpisodeDetail();
-});
+// [확정] → 분량 측정(measure-duration). 범위 안이면 자동 확정, 벗어나면 압축/분할/확장 제안.
+$("confirmScriptBtn").addEventListener("click", runDurationGate);
 $("unlockScriptBtn").addEventListener("click", () => {
   setScriptConfirmed(false);
   renderEpisodeDetail();
@@ -1497,6 +1494,7 @@ function gateShow(html) { const b = gateChatBox(); b.classList.remove("hidden");
 function gateHide() { const b = gateChatBox(); b.classList.add("hidden"); b.innerHTML = ""; }
 
 async function gatePost(path, body) {
+  const base = getApiBase();   // ★2026-07-23 버그픽스: 이 줄이 없어 브라우저에서 ReferenceError→"측정 실패"였음
   const r = await fetch(`${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/${path}`,
     { method: "POST", headers: { "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : null });
