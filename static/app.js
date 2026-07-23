@@ -79,6 +79,21 @@ function matchColonDialogue(trimmed, names) {
   return { name: bare, suffix, text };
 }
 
+// 공백 구분형 대사/내레이션: `이름 (Na)    대사` / `이름    대사` (콜론 없이 이름+2칸이상 공백+대사).
+// 대본 스펙이 콜론이 아니라 다중 공백으로 이름과 대사를 구분하므로(★2026-07-23 *…* 감싸기 도입 후
+// 이 형식이 이름 강조에 안 걸려 색·볼드가 빠지던 회귀 수정). 이름은 등록 인물이거나 이름스러운 짧은 토큰.
+function matchSpaceDialogue(trimmed, names) {
+  const m = trimmed.match(/^(.{1,12}?)\s*([(（][^)）]*[)）])?\s{2,}(\S.*)$/);
+  if (!m) return null;
+  const bare = m[1].trim();
+  const suffix = m[2] || "";
+  if (!bare) return null;
+  const known = names && names.has(bare);
+  const looksName = bare.length <= 10 && !/[.!?…,()（）\s]/.test(bare);
+  if (!known && !looksName) return null;
+  return { name: bare, suffix, text: m[3] };
+}
+
 // 대사 한 줄 HTML — 인물명(강조) + 대사. 이름 옆 (Na)/(E) 접미는 이름과 함께 강조 처리하고,
 // 대사 본문 안의 (지문)만 muted 처리한다.
 function dialogueHtml(name, suffix, rawText) {
@@ -121,6 +136,10 @@ function renderScriptMarkdown(text, names) {
       out.push(`<div class="script-direction">${renderInlineMarkdown(core)}</div>`);
       continue;
     }
+
+    // 대사(공백 구분형): `이름 (Na)    대사` — 콜론 없이 이름+다중공백+대사(감싼 것도 core로 인식)
+    const sd = matchSpaceDialogue(core, names);
+    if (sd) { out.push(dialogueHtml(sd.name, sd.suffix, sd.text)); continue; }
 
     // 제목/씬 헤딩(마크다운) — 원문 기준
     const heading = trimmed.match(/^#{1,3}\s+(.+)$/);
