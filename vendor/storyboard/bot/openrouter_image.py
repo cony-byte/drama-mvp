@@ -699,10 +699,15 @@ def _shot_mentions(work: str | None, shot: dict) -> list[str]:
                 if not e:
                     return False
                 return e.get("type") == "person" or str(e.get("id", "")).startswith("file:")
-            mentions = [
-                m for m in mentions
-                if _nfc(str(m)).strip() == focus_n or not _is_person(m)
-            ]
+            # ★2026-07-23: focus_char이 '등록된 person'일 때만 다른 person 참조를 제외한다.
+            # focus_char이 미등록 단역(예: 헤더 주체 '스태프' — person 미등록, resolve가 '스태프 의상'
+            # costume으로 partial 매칭)이면 이 제외를 건너뛴다. 안 그러면 캡션/프롬프트로 딸려온 실제
+            # 배역(한도윤/서지원)의 얼굴 참조까지 전부 지워져 그 컷만 얼굴 참조가 다 떨어지던 사고(실측).
+            if _is_person(focus_n):
+                mentions = [
+                    m for m in mentions
+                    if _nfc(str(m)).strip() == focus_n or not _is_person(m)
+                ]
     # ★2026-07-15: 얼굴 참조 사진에 찍힌 원래 옷차림이 별도 의상 참조보다 우선시되는 사고
     # 실측(사용자 리포트: "잠옷" 의상을 등록했는데 인물 참조 사진 속 정장 차림으로 계속 나옴)
     # — 참조 이미지 순서에 민감한 생성기 특성(위 focus_char 설명과 동일 근거)을 활용해,
