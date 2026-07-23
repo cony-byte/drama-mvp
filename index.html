@@ -109,7 +109,13 @@
       <div class="head-btns">
         <button id="genSynopsisBtn" type="button" class="text-btn">🤖 AI 생성</button>
         <button id="editSynopsisBtn" type="button" class="text-btn">✏️ 수정</button>
-        <textarea id="synopsisNoteInput" class="gen-note-input hidden" rows="2" placeholder="AI 생성에 반영할 의견(선택) — 예: 좀 더 애틋하게"></textarea>
+        <div id="synopsisNoteInputBox" class="gen-note-input hidden">
+          <textarea id="synopsisNoteInput" class="gen-note-textarea" rows="2" placeholder="AI 생성에 반영할 의견(선택) — 예: 좀 더 애틋하게"></textarea>
+          <div class="gen-note-actions">
+            <button type="button" class="text-btn gen-note-cancel-btn" data-note="synopsisNoteInput">취소</button>
+            <button type="button" class="text-btn gen-note-submit-btn" data-note="synopsisNoteInput" data-trigger="genSynopsisBtn">생성</button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="studioSynopsis" class="pitch-block"></div>
@@ -132,7 +138,13 @@
     <input id="charNameInput" type="text">
     <div class="gen-note-tooltip-anchor">
       <button id="genCharacterBtn" type="button">🤖 이름으로 나머지 정보 AI 생성</button>
-      <textarea id="charHintInput" class="gen-note-input hidden" rows="2" placeholder="AI 생성에 반영할 의견(선택) — 예: 츤데레 성격으로"></textarea>
+      <div id="charHintInputBox" class="gen-note-input hidden">
+        <textarea id="charHintInput" class="gen-note-textarea" rows="2" placeholder="AI 생성에 반영할 의견(선택) — 예: 츤데레 성격으로"></textarea>
+        <div class="gen-note-actions">
+          <button type="button" class="text-btn gen-note-cancel-btn" data-note="charHintInput">취소</button>
+          <button type="button" class="text-btn gen-note-submit-btn" data-note="charHintInput" data-trigger="genCharacterBtn">생성</button>
+        </div>
+      </div>
     </div>
     <div class="char-row">
       <div>
@@ -188,7 +200,13 @@
       <div class="head-btns">
         <button id="genSummaryBtn" type="button" class="text-btn">🤖 AI 생성</button>
         <button id="editSummaryBtn" type="button" class="text-btn">✏️ 수정</button>
-        <textarea id="summaryNoteInput" class="gen-note-input hidden" rows="2" placeholder="AI 생성에 반영할 의견(선택)"></textarea>
+        <div id="summaryNoteInputBox" class="gen-note-input hidden">
+          <textarea id="summaryNoteInput" class="gen-note-textarea" rows="2" placeholder="AI 생성에 반영할 의견(선택)"></textarea>
+          <div class="gen-note-actions">
+            <button type="button" class="text-btn gen-note-cancel-btn" data-note="summaryNoteInput">취소</button>
+            <button type="button" class="text-btn gen-note-submit-btn" data-note="summaryNoteInput" data-trigger="genSummaryBtn">생성</button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="episodeDetailSummary" class="pitch-block"></div>
@@ -202,19 +220,27 @@
       <h3>대본</h3>
       <div class="head-btns">
         <button id="genScriptBtn" type="button" class="text-btn">🤖 AI 생성</button>
-        <button id="editScriptBtn" type="button" class="text-btn">✏️ 수정</button>
-        <textarea id="scriptNoteInput" class="gen-note-input hidden" rows="2" placeholder="AI 생성에 반영할 의견(선택)"></textarea>
+        <div id="scriptNoteInputBox" class="gen-note-input hidden">
+          <textarea id="scriptNoteInput" class="gen-note-textarea" rows="2" placeholder="AI 생성에 반영할 의견(선택) — 예: 30초 분량의 긴장감 있는 액션 장면으로 만들어줘"></textarea>
+          <div class="gen-note-actions">
+            <button type="button" class="text-btn gen-note-cancel-btn" data-note="scriptNoteInput">취소</button>
+            <button type="button" class="text-btn gen-note-submit-btn" data-note="scriptNoteInput" data-trigger="genScriptBtn">생성</button>
+          </div>
+        </div>
       </div>
     </div>
-    <div id="episodeDetailScript" class="pitch-block episode-script"></div>
-    <textarea id="episodeScriptEdit" class="hidden pitch-edit" rows="14"></textarea>
-    <div id="scriptEditActions" class="pitch-actions hidden">
-      <button id="saveScriptBtn" type="button">✅ 저장</button>
-      <button id="cancelScriptBtn" type="button">취소</button>
-    </div>
+    <div id="episodeDetailScript" class="episode-script script-scenes"></div>
 
-    <button id="makeDramaBtn" type="button">🎬 장면 미리보기 만들기</button>
-    <button id="v3PreviewBtn" type="button">✨ v3.1 엔진으로 미리보기</button>
+    <!-- ★2026-07-22: v3.1 엔진만 남김 — 구 샷 파이프라인 진입점(장면 미리보기/이 장면들로 영상)은
+         UI에서 숨김(핸들러·엔드포인트는 남겨둠). v3.1 미리보기가 유일한 진입점. -->
+    <button id="makeDramaBtn" type="button" class="hidden">🎬 장면 미리보기 만들기</button>
+    <div id="scriptConfirmRow" class="script-confirm-row">
+      <button id="confirmScriptBtn" type="button">✅ 이 대본으로 확정할까요?</button>
+      <span id="scriptConfirmedNote" class="script-confirmed-note hidden">🔒 이 대본으로 확정됨 — 분량 측정 기준</span>
+      <button id="unlockScriptBtn" type="button" class="text-btn hidden">🔓 수정하려면 해제</button>
+    </div>
+    <div id="durationGateChat" class="gate-chat hidden"></div>
+    <button id="v3PreviewBtn" type="button">🎬 드라마 만들기</button>
     <button id="closeEpisodeDetailBtn" type="button">↩️ 스튜디오로 돌아가기</button>
   </section>
 
@@ -223,8 +249,8 @@
     <p class="modal-hint">씬별 주요 장면을 스틸컷으로 만들었어요.</p>
     <div id="stillsList"></div>
     <button id="nextSceneBtn" type="button" class="hidden">+ 다음 씬 만들기</button>
-    <button id="makeVideoFromStillsBtn" type="button">🎬 이 장면들로 영상 만들기</button>
-    <button id="v3ProduceBtn" type="button" class="hidden">✨ v3.1로 영상 만들기 (전체 자동)</button>
+    <button id="makeVideoFromStillsBtn" type="button" class="hidden">🎬 이 장면들로 영상 만들기</button>
+    <button id="v3ProduceBtn" type="button">🎬 영상 만들기 (전체 자동)</button>
     <p class="video-note">컷마다 영상을 만들어 합치느라 몇 분 걸려요. 완성되면 영상이 재생됩니다.</p>
     <button id="stillsBackBtn" type="button">↩️ 화면으로 돌아가기</button>
   </section>

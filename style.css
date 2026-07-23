@@ -87,7 +87,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 주요 CTA — 그라데이션 + 부드러운 그림자 */
 button#startChatBtn, button#restartBtn, button#errorRetryBtn, button#finalizeBtn,
 button#nextStageBtn, button#goToStudioBtn,
-button#makeDramaBtn, button#makeVideoFromStillsBtn {
+button#makeDramaBtn, button#makeVideoFromStillsBtn, button#v3PreviewBtn {
   width: 100%;
   padding: 16px;
   border-radius: 14px;
@@ -224,7 +224,9 @@ button#finalizeBtn { margin-top: 4px; }
   resize: vertical;
 }
 
-/* AI 생성 버튼 옆 의견 입력 — 레이아웃을 밀지 않는 툴팁(말풍선)으로 버튼 아래에 붕 뜬다. */
+/* AI 생성 버튼 옆 의견 입력 — 레이아웃을 밀지 않는 툴팁(말풍선)으로 버튼 아래에 붕 뜬다.
+   ★2026-07-22: textarea 하나만 떠 있고 취소/생성 버튼이 없어서, "이 버튼을 다시 눌러야
+   진짜 생성된다"는 게 안 보이는 문제(사용자 리포트) — 툴팁 안에 취소/생성 버튼을 넣는다. */
 .gen-note-tooltip-anchor { position: relative; }
 .gen-note-input {
   position: absolute;
@@ -232,19 +234,30 @@ button#finalizeBtn { margin-top: 4px; }
   right: 0;
   width: 240px;
   max-width: 70vw;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--accent);
   background: var(--card);
+  z-index: 20;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.gen-note-textarea {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--text);
   font-size: 13px;
   font-family: inherit;
   line-height: 1.5;
   resize: vertical;
-  z-index: 20;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
-.gen-note-input::placeholder { color: var(--muted); }
+.gen-note-textarea:focus { outline: none; }
+.gen-note-textarea::placeholder { color: var(--muted); }
+.gen-note-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
 #charactersBox {
   display: flex;
@@ -720,6 +733,169 @@ button#addEpisodeBtn {
 }
 .script-line { white-space: pre-wrap; }
 .script-spacer { height: 0.8em; }
+
+/* 대사(대사) vs 지문(서술/괄호) 구분 */
+.script-dialogue {
+  display: grid;
+  grid-template-columns: minmax(0, auto) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  margin: 4px 0;
+}
+.dialogue-char {
+  color: var(--accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.dialogue-text { white-space: pre-wrap; }
+.dialogue-cue {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.92em;
+}
+.script-direction {
+  color: var(--muted);
+  font-style: italic;
+  white-space: pre-wrap;
+  margin: 3px 0;
+}
+
+/* 대본 씬 카드 */
+.script-scenes { display: flex; flex-direction: column; gap: 10px; }
+.script-empty {
+  background: var(--card);
+  border-radius: 14px;
+  padding: 16px;
+  color: var(--muted);
+}
+.scene-card {
+  background: var(--card);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.scene-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.scene-collapse-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.scene-caret {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+.scene-card.collapsed .scene-caret { transform: rotate(-90deg); }
+.scene-num {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-dim);
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.scene-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scene-header-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 3px 6px;
+}
+.scene-header-input:hover { border-color: rgba(255, 255, 255, 0.12); }
+.scene-header-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+.scene-edit-btn { flex-shrink: 0; padding: 3px 8px; }
+.scene-card-body {
+  padding: 2px 14px 14px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.scene-card.collapsed .scene-card-body { display: none; }
+
+/* 씬 본문 바로 편집(미확정 기본 상태) */
+.scene-edit-area {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.scene-edit-area:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* 자동저장 순간 표시 */
+.scene-card { transition: border-color 0.25s ease; }
+.scene-card.scene-saved { border-color: var(--ok); }
+
+/* 대본 확정(잠금) */
+.script-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.script-confirmed-note {
+  color: var(--ok);
+  font-size: 13px;
+  font-weight: 600;
+}
+/* 대본 확정 버튼 — 흰 기본 버튼으로 뜨던 것 스타일링(확정=초록). 아래 CTA 버튼과 동일한 full-width */
+button#confirmScriptBtn {
+  width: 100%;
+  padding: 16px;
+  border-radius: 14px;
+  border: none;
+  background: var(--ok);
+  color: #0b1a10;
+  font-size: 16px;
+  font-weight: 700;
+}
+#episodeDetailScript.locked .scene-card {
+  border-color: rgba(74, 222, 128, 0.22);
+}
 .head-btns { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 #subtitleEditRow { display: flex; flex-direction: column; gap: 8px; }
 #episodeSubtitleInput {
@@ -742,24 +918,63 @@ button#makeDramaBtn, button#makeVideoFromStillsBtn { margin-top: 8px; }
    슬라이드가 고정돼 있고, 아직 안 온 씬은 "(생성중...)" 플레이스홀더로 자리를 채운다. */
 #stillsList {
   display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 14px;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  padding-bottom: 6px;
-  -webkit-overflow-scrolling: touch;
 }
 .still-card {
-  flex: 0 0 82%;
-  scroll-snap-align: center;
+  width: 100%;
+  max-width: 340px;
   background: var(--card);
   border-radius: 14px;
   overflow: hidden;
 }
+/* 스틸 페이지네이션 바 — [◀ 이전]  n / total  [다음 ▶] */
+.stills-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  width: 100%;
+}
+.stills-pager button[disabled] { opacity: 0.35; cursor: default; }
+.stills-counter { color: var(--muted); font-size: 14px; min-width: 56px; text-align: center; }
 .still-card img, .still-card video { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; display: block; background: #000; }
+/* 영상화 의견 툴팁 — AI 생성 툴팁과 같은 UI(카드 안이라 absolute 대신 인라인 블록으로). */
+.cut-note {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 14px 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--card);
+}
 .still-title { font-weight: 700; font-size: 14px; padding: 10px 14px 0; }
 .still-caption { color: var(--muted); font-size: 13px; line-height: 1.5; padding: 4px 14px 14px; }
 .still-cut-actions { display: flex; gap: 8px; padding: 0 14px 14px; }
 .still-cut-actions button { flex: 1; }
+
+/* 스틸컷을 전부 삭제했을 때 뜨는 "씬1부터 만들기" 카드 — 스틸컷 이미지와 같은 크기. */
+.make-scene-card {
+  border: 2px dashed var(--accent);
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+  text-align: center;
+}
+.make-scene-card:hover { border-color: var(--text); }
+.make-scene-plus {
+  aspect-ratio: 9 / 16;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 64px;
+  font-weight: 300;
+  color: var(--accent);
+}
 
 .still-card.still-pending {
   aspect-ratio: 9 / 16;
@@ -907,3 +1122,27 @@ video#resultVideo {
 #errorView { text-align: center; color: #f87171; }
 
 .hidden { display: none !important; }
+
+/* 분량 게이트 챗봇 패널 — [확정] 시 러닝타임 측정/자동맞춤 대화 */
+.gate-chat { margin: 10px 0 4px; }
+.gate-chat.hidden { display: none; }
+.gate-bubble {
+  background: rgba(90, 140, 255, 0.10);
+  border: 1px solid rgba(120, 160, 255, 0.30);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.gate-bubble p { margin: 0; }
+.gate-bubble small { opacity: 0.7; }
+.gate-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.gate-btn {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit; border-radius: 999px;
+  padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+.gate-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.gate-btn.primary { background: #4d78ff; border-color: #4d78ff; color: #fff; font-weight: 600; }
+.gate-btn.primary:hover { background: #3d68ef; }
