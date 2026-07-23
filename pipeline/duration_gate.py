@@ -16,12 +16,19 @@ from . import orchestrator as orch
 TARGET_SECONDS = 100
 
 
-def measure(script: str, episode: int = 1, characters: list[dict] | None = None) -> dict:
-    """스켈레톤을 생성해 화 전체 러닝타임을 측정. 반환:
+def measure(script: str, episode: int = 1, characters: list[dict] | None = None,
+            skeleton_text: str | None = None) -> dict:
+    """스켈레톤으로 화 전체 러닝타임을 측정. 반환:
     {total, min, max, target, verdict('ok'|'over'|'under'), scenes:[{num,seconds,title}], skeleton}
-    LLM 1회(generate_episode_skeleton) 비용만 든다."""
-    text, scenes, _errors = orch.generate_episode_skeleton_validated(
-        script, episode=episode, characters=characters)
+    ★skeleton_text가 주어지면(대본이 안 바뀌어 캐시된 뼈대) 그걸 파싱만 해 LLM 없이 즉시 측정한다.
+    없으면 LLM 1회(generate_episode_skeleton)로 새로 만든다 — 매 클릭 재생성/느린 터널 타임아웃 방지."""
+    if skeleton_text:
+        text = skeleton_text
+        scenes = [v3_schema.parse_scene(hdr, body)
+                  for _, hdr, body in orch.parsing.split_scenes(text)]
+    else:
+        text, scenes, _errors = orch.generate_episode_skeleton_validated(
+            script, episode=episode, characters=characters)
     per = [{"num": s.get("scene_num"),
             "seconds": round(s.get("declared_seconds") or 0, 1),
             "title": s.get("title")} for s in scenes]

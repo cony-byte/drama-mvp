@@ -1555,12 +1555,17 @@ function gateBubble(msg, buttons) {
 function gateScenes(m) { return (m.scenes || []).map(s => `씬${s.num} ${s.seconds}초`).join(" · "); }
 
 async function runDurationGate() {
-  gateShow(gateBubble("⏳ 대본으로 분량을 재는 중… (스켈레톤 생성, 몇 초 걸려요)"));
+  const btn = $("confirmScriptBtn");
+  if (btn.disabled) return;              // 측정 중 중복 클릭 방지(느린 터널에서 요청 쌓임 → 실패 방지)
+  btn.disabled = true;
+  gateShow(gateBubble("⏳ 대본으로 분량을 재는 중… (처음엔 뼈대 생성으로 최대 1분, 이후엔 즉시)"));
   try {
     renderGateVerdict(await gatePost("measure-duration"));
   } catch (e) {
     gateShow(gateBubble("분량 측정에 실패했어요 😢 잠시 후 [이 대본으로 확정]을 다시 눌러줘요.",
       [{ act: "close", label: "닫기" }]));
+  } finally {
+    btn.disabled = false;
   }
 }
 

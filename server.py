@@ -47,6 +47,7 @@ from pipeline.orchestrator import (
     preview_scene_v3, produce_episode_v3_job, produce_episode_video, regenerate_cut_still,
     run_full_pipeline, studio_script_bible, videoize_cut_job,
 )
+from pipeline.orchestrator import _script_signature
 
 app = FastAPI()
 app.add_middleware(
@@ -433,8 +434,23 @@ def studio_measure_duration(project_id: str, num: int):
         raise HTTPException(404, "화를 찾을 수 없어요.")
     if not (episode.get("script") or "").strip():
         raise HTTPException(400, "대본이 먼저 있어야 분량을 잴 수 있어요.")
-    return duration_gate.measure(episode["script"], episode=num,
-                                 characters=project.get("characters") or [])
+    # ★2026-07-23: 대본이 안 바뀌었으면(뼈대 지문 일치) 캐시된 v3_skeleton으로 LLM 없이 즉시 측정
+    # — 매 클릭 재생성으로 느린 터널에서 60초+ 걸려 "측정 실패"로 보이던 문제. 새로 만들면 저장해
+    # 이후 [드라마 만들기](produce)도 그대로 재사용한다.
+    script = episode["script"]
+    sig = _script_signature(script)
+    cached = episode.get("v3_skeleton") if episode.get("v3_skeleton_src") == sig else None
+    try:
+        result = duration_gate.measure(script, episode=num,
+                                       characters=project.get("characters") or [],
+                                       skeleton_text=cached)
+    except Exception as e:
+        # 원시 500은 CORS 헤더가 안 붙어 브라우저에 "Failed to fetch"로만 보인다 — 감싸서 전달.
+        raise HTTPException(500, f"분량 측정에 실패했어요: {e}")
+    if not cached:
+        studio.update_episode(project_id, num, v3_skeleton=result["skeleton"],
+                              v3_skeleton_src=sig, v3_scenes=[])
+    return result
 
 
 @app.post("/api/studio/{project_id}/episodes/{num}/autofit-duration")
