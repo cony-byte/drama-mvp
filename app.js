@@ -1194,14 +1194,23 @@ function renderStillsPage() {
     return;
   }
   stillsCutIndex = Math.max(0, Math.min(stillsCutIndex, cuts.length - 1));
-  list.appendChild(_stillCardEl(cuts[stillsCutIndex]));
-  const pager = document.createElement("div");
-  pager.className = "stills-pager";
-  pager.innerHTML = `
-    <button type="button" class="text-btn stills-prev-btn"${stillsCutIndex === 0 ? " disabled" : ""}>◀ 이전</button>
-    <span class="stills-counter">${stillsCutIndex + 1} / ${cuts.length}</span>
-    <button type="button" class="text-btn stills-next-btn"${stillsCutIndex === cuts.length - 1 ? " disabled" : ""}>다음 ▶</button>`;
-  list.appendChild(pager);
+  // ◀/▶ 컷 이동 버튼을 이미지 양옆에 둔다(카루셀 형태). 카운터는 이미지 밑.
+  const row = document.createElement("div");
+  row.className = "stills-cut-row";
+  const prev = document.createElement("button");
+  prev.type = "button"; prev.className = "text-btn stills-side-btn stills-prev-btn";
+  prev.textContent = "◀"; prev.disabled = stillsCutIndex === 0;
+  const next = document.createElement("button");
+  next.type = "button"; next.className = "text-btn stills-side-btn stills-next-btn";
+  next.textContent = "▶"; next.disabled = stillsCutIndex === cuts.length - 1;
+  row.appendChild(prev);
+  row.appendChild(_stillCardEl(cuts[stillsCutIndex]));
+  row.appendChild(next);
+  list.appendChild(row);
+  const counter = document.createElement("div");
+  counter.className = "stills-cut-counter";
+  counter.textContent = `${stillsCutIndex + 1} / ${cuts.length}`;
+  list.appendChild(counter);
 }
 
 function renderStillsList(items, total) {
