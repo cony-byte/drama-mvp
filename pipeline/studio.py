@@ -126,10 +126,12 @@ def _summary(project_id: str, p: dict) -> dict:
 
 
 def list_projects(owner: str) -> list[dict]:
-    """이 owner(IP)가 만든 작품 요약 목록 — 최근 수정순."""
+    """이 owner(IP)가 만든 작품 + 공유(shared) 표시된 작품 요약 목록 — 최근 수정순.
+    ★2026-07-23: 사내 테스트 배포에서 데모 작품은 터널 뒤 요청자 IP가 제각각이라도 모두에게
+    보이도록 shared=True면 owner 무관하게 노출한다(신규 작품은 그대로 owner별 비공개)."""
     with _LOCK:
         items = [_summary(pid, p) for pid, p in _PROJECTS.items()
-                 if p.get("owner") == owner]
+                 if p.get("owner") == owner or p.get("shared")]
     items.sort(key=lambda s: s["updated_at"], reverse=True)
     return items
 
