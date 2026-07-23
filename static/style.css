@@ -1186,3 +1186,14 @@ button#studioWorksBtnBottom:hover { background: #3d3d3d; }
 
 /* 스틸 페이지네이션을 카드 위(헤더 밑)에 둘 때 간격 */
 .stills-pager-top { margin-top: 0; margin-bottom: 12px; }
+
+/* 상단 고정 씬 페이지네이션 바(< 씬 N/M >) — #stillsList 밖이라 생성 중에도 유지 */
+.stills-scene-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  margin-bottom: 12px;
+}
+.stills-scene-pager:empty { display: none; }

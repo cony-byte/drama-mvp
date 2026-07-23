@@ -469,7 +469,9 @@ async function pollJob(jobId) {
         renderStillsList(stills, job.total || stills.length);
         // 생성 중엔 생성 중인(최신) 씬을 따라가되, 유저가 이전 씬으로 넘겨봤으면(stillsFollow=false) 그대로 둔다.
         if (job.status !== "done" && stillsFollow) {
-          stillsSceneIndex = _stillsSceneNums().length - 1;
+          stillsSceneIndex = _stillsSceneNums().length - 1;   // 생성 중인 최신 씬
+          const sn = _stillsSceneNums()[stillsSceneIndex];
+          stillsCutIndex = Math.max(0, stillsCuts.filter((c) => Number(c.scene_num) === Number(sn)).length - 1); // 최신 컷
           renderStillsPage();
         }
       } else if (job.status !== "done") {
@@ -941,7 +943,7 @@ function renderEpisodeDetail() {
 
 function openEpisodeDetail(num) {
   currentEpisodeNum = num;
-  stillsPageIndex = 0; stillsSceneIndex = 0; stillsFollow = true; // 다른 화 열 때 스틸 페이지 처음으로
+  stillsPageIndex = 0; stillsSceneIndex = 0; stillsCutIndex = 0; stillsFollow = true; // 다른 화 열 때 스틸 페이지 처음으로
   saveLastOpen(studioProjectId, num);
   // 편집 모드 초기화(다른 화 열 때 이전 편집 상태가 남지 않게)
   exitSubtitleEdit();
@@ -971,7 +973,7 @@ function startJob(endpoint, mode, prepMsg, query) {
       // ★2026-07-22: 스틸 모드는 별도 진행 화면 없이 곧바로 스틸 뷰(생성 중…)로 — 백엔드
       // 파이프라인(참조 생성·붙이기·상세 콘티 분할)이 도는 동안 폴링이 완성된 컷부터 노출한다.
       if (mode === "stills") {
-        stillsPageIndex = 0; stillsSceneIndex = 0; stillsFollow = true;  // 새 생성 시작 → 생성 중 씬 자동 추적
+        stillsPageIndex = 0; stillsSceneIndex = 0; stillsCutIndex = 0; stillsFollow = true;  // 새 생성 시작 → 생성 중 씬 자동 추적
         showView("stills");
         renderStillsLoading(prepMsg);
       } else {
@@ -1094,6 +1096,7 @@ let stillsCuts = [];
 let stillsPageIndex = 0;
 let stillsSceneIndex = 0;   // ★2026-07-23 씬 단위 페이지네이션: 현재 보고 있는 씬 페이지(0-based)
 let stillsFollow = true;    // 생성 중 최신(생성 중) 씬을 자동 추적. 유저가 이전/다음으로 넘기면 false → 안 뺏김
+let stillsCutIndex = 0;     // 현재 씬 안에서 보고 있는 컷(스틸) 인덱스 — 씬 안은 예전처럼 한 장씩 페이지네이션
 // 영상화 진행 중인 컷들("scene-cut") — 페이지를 넘겨 카드가 다시 그려져도 "영상화 중" 상태를 유지.
 const videoizingCuts = new Set();
 const cutKey = (scene, cut) => `${scene}-${cut}`;
@@ -1123,8 +1126,20 @@ function _stillCardEl(c) {
 
 // 스틸이 아직 하나도 안 나온 로딩 상태 — 백엔드 파이프라인 현재 단계(stage)를 "생성 중…"으로.
 function renderStillsLoading(stage) {
+  renderScenePager();   // 생성(로딩) 중에도 씬 페이지네이션은 위에 그대로 유지
   $("stillsList").innerHTML = `<div class="roster-empty">🎬 ${escapeHtml(stage || "생성 중…")}</div>`;
 }
+
+// 씬 페이지네이션(상단 고정) 클릭 — 씬 이동. 씬을 바꾸면 그 씬의 첫 컷부터, 폴링 자동추적 해제.
+$("stillsScenePager").addEventListener("click", (e) => {
+  if (e.target.closest(".scene-prev-btn")) {
+    stillsFollow = false;
+    if (stillsSceneIndex > 0) { stillsSceneIndex--; stillsCutIndex = 0; renderStillsPage(); }
+  } else if (e.target.closest(".scene-next-btn")) {
+    stillsFollow = false;
+    if (stillsSceneIndex < _stillsSceneNums().length - 1) { stillsSceneIndex++; stillsCutIndex = 0; renderStillsPage(); }
+  }
+});
 
 // ★2026-07-23 씬 단위 페이지네이션: 전체 씬 목록(scene_lines) 기준으로 한 페이지=한 씬.
 //   그 씬의 컷들을 카드로 나열하고, 아직 스틸이 없는 씬이면 "+" 빈 카드 1장(클릭→그 씬 생성).
@@ -1142,39 +1157,51 @@ function _sceneTitle(sceneNum) {
   return hit ? (hit[1] || "") : "";
 }
 
+// ★2026-07-23: 씬 페이지네이션 바(상단 고정) — #stillsList 밖의 별도 영역이라 생성 중 로딩으로
+//   #stillsList가 갈려도 사라지지 않는다("빈 카드 눌러 생성 시 씬 페이지네이션 사라짐" 수정).
+function renderScenePager() {
+  const box = $("stillsScenePager");
+  if (!box) return;
+  const sceneNums = _stillsSceneNums();
+  if (!sceneNums.length) { box.innerHTML = ""; return; }
+  stillsSceneIndex = Math.max(0, Math.min(stillsSceneIndex, sceneNums.length - 1));
+  const sceneNum = sceneNums[stillsSceneIndex];
+  const title = _sceneTitle(sceneNum);
+  box.innerHTML = `
+    <button type="button" class="text-btn scene-prev-btn"${stillsSceneIndex === 0 ? " disabled" : ""}>◀</button>
+    <span class="stills-counter">씬 ${stillsSceneIndex + 1} / ${sceneNums.length}${title ? " · " + escapeHtml(title) : ""}</span>
+    <button type="button" class="text-btn scene-next-btn"${stillsSceneIndex === sceneNums.length - 1 ? " disabled" : ""}>▶</button>`;
+}
+
+// #stillsList: 현재 씬의 컷들을 예전처럼 '한 장씩'(◀이전 N/M 다음▶) 보여준다. 스틸 없는 씬은 "+" 카드.
 function renderStillsPage() {
+  renderScenePager();
   const list = $("stillsList");
   list.innerHTML = "";
   const sceneNums = _stillsSceneNums();
   if (!sceneNums.length) return;
-  stillsSceneIndex = Math.max(0, Math.min(stillsSceneIndex, sceneNums.length - 1));
   const sceneNum = sceneNums[stillsSceneIndex];
   const cuts = stillsCuts.filter((c) => Number(c.scene_num) === Number(sceneNum));
-
-  const cards = document.createElement("div");
-  cards.className = "stills-scene-cuts";
-  if (cuts.length) {
-    cuts.forEach((c) => cards.appendChild(_stillCardEl(c)));
-  } else {
-    // 스틸 없는 씬 → "+" 빈 카드 1장. 클릭하면 그 씬 스틸 생성.
+  if (!cuts.length) {
+    // 스틸 없는 씬 → "+" 빈 카드 1장(클릭→그 씬 생성). 씬 페이지네이션은 위에 그대로 유지된다.
     const mk = document.createElement("button");
     mk.type = "button";
     mk.className = "still-card make-scene-card";
     mk.dataset.scene = sceneNum;
     mk.innerHTML = `<div class="still-media make-scene-plus">＋</div>
       <div class="still-title">씬${sceneNum} 스틸컷 만들기</div>`;
-    cards.appendChild(mk);
+    list.appendChild(mk);
+    return;
   }
-  // ★2026-07-23: 페이지네이션 바를 스틸 카드 '위'(헤더 바로 밑)에 둔다 — 씬 이동을 먼저 보게.
-  const title = _sceneTitle(sceneNum);
+  stillsCutIndex = Math.max(0, Math.min(stillsCutIndex, cuts.length - 1));
+  list.appendChild(_stillCardEl(cuts[stillsCutIndex]));
   const pager = document.createElement("div");
-  pager.className = "stills-pager stills-pager-top";
+  pager.className = "stills-pager";
   pager.innerHTML = `
-    <button type="button" class="text-btn stills-prev-btn"${stillsSceneIndex === 0 ? " disabled" : ""}>◀ 이전</button>
-    <span class="stills-counter">씬 ${stillsSceneIndex + 1} / ${sceneNums.length}${title ? " · " + escapeHtml(title) : ""}</span>
-    <button type="button" class="text-btn stills-next-btn"${stillsSceneIndex === sceneNums.length - 1 ? " disabled" : ""}>다음 ▶</button>`;
+    <button type="button" class="text-btn stills-prev-btn"${stillsCutIndex === 0 ? " disabled" : ""}>◀ 이전</button>
+    <span class="stills-counter">${stillsCutIndex + 1} / ${cuts.length}</span>
+    <button type="button" class="text-btn stills-next-btn"${stillsCutIndex === cuts.length - 1 ? " disabled" : ""}>다음 ▶</button>`;
   list.appendChild(pager);
-  list.appendChild(cards);
 }
 
 function renderStillsList(items, total) {
@@ -1240,15 +1267,17 @@ function pollCutVideoJob(jobId, sceneNum, cutNum) {
 
 // 컷 카드의 재생성/영상화 버튼 — 이벤트 위임(카드는 매번 다시 그려지므로).
 $("stillsList").addEventListener("click", async (e) => {
-  // 페이지네이션(◀ 이전 / 다음 ▶) — 스틸 카드보다 먼저 처리(이 버튼들은 .still-card 밖에 있음).
+  // 컷 페이지네이션(◀ 이전 / 다음 ▶) — 현재 씬 '안'에서 컷 한 장씩 넘긴다.
   if (e.target.closest(".stills-prev-btn")) {
-    stillsFollow = false;   // 유저가 직접 넘김 → 폴링이 최신 씬으로 안 끌고 감
-    if (stillsSceneIndex > 0) { stillsSceneIndex--; renderStillsPage(); }
+    stillsFollow = false;
+    if (stillsCutIndex > 0) { stillsCutIndex--; renderStillsPage(); }
     return;
   }
   if (e.target.closest(".stills-next-btn")) {
     stillsFollow = false;
-    if (stillsSceneIndex < _stillsSceneNums().length - 1) { stillsSceneIndex++; renderStillsPage(); }
+    const sn = _stillsSceneNums()[stillsSceneIndex];
+    const n = stillsCuts.filter((c) => Number(c.scene_num) === Number(sn)).length;
+    if (stillsCutIndex < n - 1) { stillsCutIndex++; renderStillsPage(); }
     return;
   }
 
