@@ -1155,3 +1155,31 @@ video#resultVideo {
 .gate-btn:hover { background: rgba(255, 255, 255, 0.12); }
 .gate-btn.primary { background: #4d78ff; border-color: #4d78ff; color: #fff; font-weight: 600; }
 .gate-btn.primary:hover { background: #3d68ef; }
+
+/* ＋ 씬 추가 버튼 — 대본 편집 중 대본 끝에 새 씬 추가(점선 add 스타일) */
+.add-scene-btn {
+  width: 100%;
+  padding: 13px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  margin: 6px 0 2px;
+}
+.add-scene-btn:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--text); }
+.add-scene-btn.hidden { display: none; }
+/* 스튜디오 하단 "내 작품" 버튼 */
+button#studioWorksBtnBottom {
+  width: 100%;
+  padding: 14px;
+  border-radius: 14px;
+  border: none;
+  background: #333;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 8px;
+}
+button#studioWorksBtnBottom:hover { background: #3d3d3d; }

@@ -1507,6 +1507,7 @@ function applyScriptLock(locked) {
   if (typeof locked === "undefined") locked = isScriptConfirmed();
   // 확정 상태면 AI 생성 숨김(재생성 차단). 씬 편집칸은 renderScriptScenes가 locked면 읽기전용으로 렌더.
   $("genScriptBtn").classList.toggle("hidden", locked);
+  $("addSceneBtn").classList.toggle("hidden", locked);   // 확정 상태면 씬 추가 숨김(편집 중에만)
   if (locked) hideNote("scriptNoteInput");
   // 확정 버튼 ↔ 확정됨 표시/해제 토글
   $("confirmScriptBtn").classList.toggle("hidden", locked);
@@ -1523,6 +1524,22 @@ $("confirmScriptBtn").addEventListener("click", runDurationGate);
 $("unlockScriptBtn").addEventListener("click", () => {
   setScriptConfirmed(false);
   renderEpisodeDetail();
+});
+
+// ＋ 씬 추가 — 대본 끝에 새 씬 카드(헤더 + 빈 본문)를 붙이고 저장 후 재렌더.
+$("addSceneBtn").addEventListener("click", async () => {
+  const nextNum = (scriptSegsModel || []).filter((s) => s.type === "scene").length + 1;
+  const header = `${nextNum}. 새 장소 / 시간`;
+  scriptSegsModel.push({ type: "scene", text: header + "\n", num: nextNum, header });
+  const btn = $("addSceneBtn");
+  btn.disabled = true;
+  try {
+    await patchEpisode({ script: serializeSegments(scriptSegsModel) });  // PATCH + loadStudio + 재렌더
+  } catch (e) {
+    alert(`씬 추가 실패: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // ── 분량 게이트: [확정] → 스켈레톤으로 화 러닝타임 측정(90~120초). 벗어나면 AI 자동맞춤 제안. ──
@@ -1943,6 +1960,7 @@ async function openWorks() {
 $("openWorksBtn").addEventListener("click", openWorks);
 $("worksBackBtn").addEventListener("click", () => showView("input"));
 $("studioBackBtn").addEventListener("click", openWorks);
+$("studioWorksBtnBottom").addEventListener("click", openWorks);  // 스튜디오 하단 "내 작품"
 
 $("worksList").addEventListener("click", async (e) => {
   const delBtn = e.target.closest(".work-card-del");
