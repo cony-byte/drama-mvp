@@ -138,7 +138,7 @@ PITCH_CARD_SYSTEM = """너는 숏폼 로맨스 드라마 카피라이터다. 주
 형식:
 {"logline": "한두 문장 로그라인",
  "characters": [
-   {"name": "이름", "role": "성별/신분 등 짧은 설정(예: '여 · 재벌가 2세')", "line": "그 인물의 핵심 대사 한 줄"},
+   {"name": "이름", "role": "성별 · 나이대 · 신분 (반드시 이 순서, 예: '여 · 20대 · 재벌가 2세', '남 · 50대 · 대기업 회장')", "line": "그 인물의 핵심 대사 한 줄"},
    {"name": "이름", "role": "...", "line": "..."}
  ],
  "key_scene": {
@@ -250,8 +250,19 @@ FACE_REF_FRAMING = (
     "Head-and-shoulders identity headshot, tightly framed on the face (top of head to shoulders "
     "only, no full body). Plain neutral crew-neck t-shirt in a muted solid color, high neckline. "
     "No accessories, no jewelry, no earrings, no glasses, no hats, no scarves. Front-facing or "
-    "slight three-quarter view, neutral even studio lighting, plain seamless background. "
+    "slight three-quarter view, soft flattering portrait lighting with a gentle rim light for "
+    "depth (even and clear enough to read the whole face), plain seamless background. "
     "This is a face reference — do NOT show any distinctive costume, uniform, or outfit."
+)
+
+# 얼굴 참조지만 '고정값 이미지'이기도 하니 매력·완성도는 끌어올린다(밋밋한 증명사진 방지). 위
+# FACE_REF_FRAMING의 기능 제약(크롭·무지 상의·액세서리 없음·평이 배경)은 그대로 유지하고, 매력은
+# 조명·표정·헤어·렌더 품질로만 낸다 — 참조로서의 깨끗함(의상·소품 배제)을 해치지 않게.
+FACE_REF_APPEAL = (
+    "Make the subject genuinely attractive, photogenic and charismatic, with strong on-screen "
+    "presence — like a polished K-drama character key visual, not a flat neutral ID photo. "
+    "Flawless healthy glowing skin, well-groomed flattering hairstyle, striking expressive eyes, "
+    "and a subtle characterful expression full of personality. High production value."
 )
 
 
@@ -272,24 +283,77 @@ def _face_appearance(appearance: str) -> str:
     return ", ".join(kept)
 
 
+def _char_vibe(character: dict) -> str:
+    """캐릭터의 포지션(role)을 초상 프롬프트의 정체성·분위기로 — 온보딩 피치카드처럼 성별·나이
+    필드가 비고 정체성이 role("여 · 50대 재벌 회장")에만 있을 때 그 성별·나이·신분이 실제 인물에
+    반영되게 한다(role을 안 쓰면 엉뚱한 얼굴이 나옴). 얼굴 참조라 의상은 FACE_REF_FRAMING이 막는다."""
+    role = (character.get("role") or "").strip()
+    return f" Character identity and role (reflect the implied gender, age, and status): {role}." if role else ""
+
+
+def _age_en(age: str) -> str:
+    """나이 표기를 이미지 프롬프트용 영어로 정규화 — "50대 years old" 같은 깨진 문구 방지.
+    '50대'→'in their 50s', '20대 후반'→'late 20s', '30세'/'30살'/'30'→'30 years old'. 그 외는 그대로."""
+    a = (age or "").strip()
+    if not a:
+        return ""
+    m = re.match(r"^(\d0)\s*대\s*(초반|중반|후반)?$", a)
+    if m:
+        band = {"초반": "early ", "중반": "mid ", "후반": "late "}.get(m.group(2) or "", "")
+        return f"{band}{m.group(1)}s"
+    m = re.match(r"^(\d{1,3})\s*(?:세|살)?$", a)
+    if m:
+        return f"{m.group(1)} years old"
+    return a
+
+
+_ROLE_GENDER_TOKEN = {"남자": "남", "여자": "여", "남": "남", "여": "여", "male": "남", "female": "여"}
+
+
+def _role_gender_age(role: str) -> tuple[str, str]:
+    """role("남 · 50대 · 대기업 회장")에서 성별·나이를 추출 — 온보딩 초상은 name+role만 오고
+    gender/age 필드가 비어 오므로, 여기서 role을 파싱해 초상에 반영한다. 나이는 'N0대' 또는
+    N≥10인 'N세/살'만(재벌 2세=세대 표기 제외)."""
+    parts = [p.strip() for p in (role or "").split("·") if p.strip()]
+    gender = ""
+    if parts:
+        for tok, g in _ROLE_GENDER_TOKEN.items():
+            if parts[0] == tok or parts[0].startswith(tok + " ") or parts[0].startswith(tok + ","):
+                gender = g
+                break
+    age = ""
+    m = re.search(r"\d0대(?:\s*(?:초반|중반|후반))?", role or "")
+    if m:
+        age = m.group(0)
+    else:
+        ym = next((y for y in re.finditer(r"(\d{1,3})\s*[세살]", role or "") if int(y.group(1)) >= 10), None)
+        if ym:
+            age = ym.group(0)
+    return gender, age
+
+
 def generate_character_portrait(character: dict) -> bytes:
     """인물 '얼굴 전용 고정 레퍼런스' 이미지 1장(PNG bytes). 이름·성별·나이·(옷차림을 뺀)외형을
     한 프롬프트로 묶어 얼굴/헤어 정체성만 담고, 얼굴~어깨 크롭·중립 무지 상의·액세서리 없음으로
     고정한다 — 이 이미지가 이후 샷 생성의 얼굴 참조로 쓰이므로 의상·소품이 들어가면 안 된다.
     스틸컷 API라 영상화 때와 달리 클로즈업 안전필터 리스크는 없음(그 필터는 image-to-video 전용)."""
-    gender_en = _GENDER_EN.get((character.get("gender") or "").strip(), "")
+    gender = (character.get("gender") or "").strip()
     age = (character.get("age") or "").strip()
+    role = (character.get("role") or "").strip()
+    if role and (not gender or not age):   # 온보딩 초상: role만 오므로 성별·나이를 role에서 보충
+        g2, a2 = _role_gender_age(role)
+        gender = gender or g2
+        age = age or a2
+    gender_en = _GENDER_EN.get(gender, "")
     face_appearance = _face_appearance((character.get("appearance") or "").strip())
-    basics = ", ".join(filter(None, [
-        gender_en,
-        f"{age} years old" if age else "",
-    ]))
+    basics = ", ".join(filter(None, [gender_en, _age_en(age)]))
+    subject = character.get("name", "") + (f" — {basics}" if basics else "")
     appearance_clause = (
         f" Face and hair identity (follow closely): {face_appearance}." if face_appearance else ""
     )
     prompt = (
-        f"Character face reference. Subject: {character.get('name', '')} — {basics}.{appearance_clause} "
-        f"{FACE_REF_FRAMING} {PORTRAIT_STYLE}"
+        f"Character face reference. Subject: {subject}.{_char_vibe(character)}{appearance_clause} "
+        f"{FACE_REF_FRAMING} {FACE_REF_APPEAL} {PORTRAIT_STYLE}"
     )
     png, _cost = _with_retry(oi.generate, prompt, aspect_ratio="2:3", refs=[])
     return png
@@ -308,8 +372,8 @@ def _make_face_reference(png: bytes, character: dict) -> bytes | None:
             "headshot. Preserve their facial identity, facial features, proportions, skin tone, and "
             f"hairstyle from the reference as closely as possible — same face, same hair.{appearance_clause} "
             "Do NOT copy the clothing, accessories, pose, or background from the reference; replace "
-            "them per the framing rules. Do NOT use a full-body or strong-costume framing. "
-            + FACE_REF_FRAMING + " " + PORTRAIT_STYLE)
+            "them per the framing rules. Do NOT use a full-body or strong-costume framing."
+            + _char_vibe(character) + " " + FACE_REF_FRAMING + " " + FACE_REF_APPEAL + " " + PORTRAIT_STYLE)
         out, _cost = _with_retry(oi.generate, prompt, aspect_ratio="2:3",
                                 refs=[oi.png_data_url(png)])
         return out
