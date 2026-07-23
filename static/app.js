@@ -1165,16 +1165,16 @@ function renderStillsPage() {
       <div class="still-title">씬${sceneNum} 스틸컷 만들기</div>`;
     cards.appendChild(mk);
   }
-  list.appendChild(cards);
-
+  // ★2026-07-23: 페이지네이션 바를 스틸 카드 '위'(헤더 바로 밑)에 둔다 — 씬 이동을 먼저 보게.
   const title = _sceneTitle(sceneNum);
   const pager = document.createElement("div");
-  pager.className = "stills-pager";
+  pager.className = "stills-pager stills-pager-top";
   pager.innerHTML = `
     <button type="button" class="text-btn stills-prev-btn"${stillsSceneIndex === 0 ? " disabled" : ""}>◀ 이전</button>
     <span class="stills-counter">씬 ${stillsSceneIndex + 1} / ${sceneNums.length}${title ? " · " + escapeHtml(title) : ""}</span>
     <button type="button" class="text-btn stills-next-btn"${stillsSceneIndex === sceneNums.length - 1 ? " disabled" : ""}>다음 ▶</button>`;
   list.appendChild(pager);
+  list.appendChild(cards);
 }
 
 function renderStillsList(items, total) {
