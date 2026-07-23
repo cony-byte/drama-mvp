@@ -1475,9 +1475,16 @@ function applyScriptLock(locked) {
   $("scriptConfirmedNote").classList.toggle("hidden", !locked);
   $("unlockScriptBtn").classList.toggle("hidden", !locked);
   $("episodeDetailScript").classList.toggle("locked", locked);
+  // ★[드라마 만들기]는 확정(locked) 후에만 노출 — 확정 전엔 숨김. 확정하면 [수정]+[드라마 만들기]로 나뉨.
+  $("v3PreviewBtn").classList.toggle("hidden", !locked);
+  gateHide();  // ★임시: 스켈레톤 분량 측정 단계 우회(measure-duration 브라우저 실패 조사 중) — 게이트 챗봇 미사용
 }
 
-$("confirmScriptBtn").addEventListener("click", runDurationGate);
+// ★임시: [확정]은 분량 측정(measure-duration) 없이 바로 잠금+버튼 노출만. 원인 파악 후 게이트 복원 예정.
+$("confirmScriptBtn").addEventListener("click", () => {
+  setScriptConfirmed(true);
+  renderEpisodeDetail();
+});
 $("unlockScriptBtn").addEventListener("click", () => {
   setScriptConfirmed(false);
   renderEpisodeDetail();
