@@ -471,7 +471,12 @@ async function pollJob(jobId) {
         // renderStillsPage가 현재 stillsSceneIndex/stillsCutIndex 그대로 렌더 → 위치 안 옮김.
         const grew = stills.length !== _lastStillsLen;
         _lastStillsLen = stills.length;
-        if (grew) renderStillsList(stills, job.total || stills.length);
+        if (grew) {
+          _setStillsData(stills);   // 데이터만 갱신(내비게이션 시 최신 반영)
+          // ★이미 실제 카드를 보고 있으면 다시 그리지 않는다 → 새 컷 생겨도 화면이 안 튄다.
+          //   로딩/"+" 빈 상태일 때만 첫 렌더로 현재 씬 콘텐츠를 채운다.
+          if (!$("stillsList").querySelector(".still-media img")) renderStillsPage();
+        }
       } else if (job.status !== "done") {
         renderStillsLoading(job.stage || "생성 중…");
       }
@@ -1212,13 +1217,18 @@ function renderStillsPage() {
   list.appendChild(counter);
 }
 
+// stillsCuts 데이터만 갱신(렌더 X) — 폴링 중 현재 카드를 안 건드리고 데이터만 최신화할 때 쓴다.
+function _setStillsData(items) {
+  const isV3 = (items || []).some((it) => it.clip_id != null);
+  stillsCuts = (isV3 ? [...(items || [])] : representativePreviewItems(items)).sort((a, b) =>
+    (a.scene_num - b.scene_num) || ((a.cut_num || 0) - (b.cut_num || 0)));
+}
+
 function renderStillsList(items, total) {
   const list = $("stillsList");
   list.innerHTML = "";
   // v3.1 스틸은 클립마다 한 장씩(각자 clip_id 보유) — 전부 보여준다. 구 파이프라인만 씬당 대표 1장.
-  const isV3 = (items || []).some((it) => it.clip_id != null);
-  stillsCuts = (isV3 ? [...(items || [])] : representativePreviewItems(items)).sort((a, b) =>
-    (a.scene_num - b.scene_num) || ((a.cut_num || 0) - (b.cut_num || 0)));
+  _setStillsData(items);
   const sceneNums = _stillsSceneNums();
   if (!sceneNums.length) {
     // 씬 목록도 스틸도 없음: 생성 중이면 로딩, 아니면 "씬1부터 만들기" 카드로 진입점 제공.
