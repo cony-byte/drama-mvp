@@ -41,6 +41,7 @@ import urllib.error
 import urllib.request
 
 from . import config
+from . import costmeter
 
 _VIDEOS_URL = "https://openrouter.ai/api/v1/videos"
 APPLICATION = config.OPENROUTER_VIDEO_MODEL  # higgsfield_video와 인터페이스 맞춤(app.py 무손실 교체용)
@@ -61,6 +62,16 @@ def estimate_cost(duration: int, resolution: str = "720p") -> float:
     tokens = (h * w * (duration or 5) * 24) / 1024
     rate = _PRICE_PER_TOKEN.get(APPLICATION, _PRICE_PER_TOKEN["bytedance/seedance-2.0-fast"])
     return tokens * rate
+
+
+def _fail_reason(st: dict) -> str:
+    """실패한 폴링 응답에서 사람이 읽을 실패 사유를 추출한다. 흔한 에러 필드를 우선 찾고,
+    없으면 응답 전체를 잘라 돌려준다(원인 필드가 JSON 덩어리에 묻혀 안 보이던 문제 방지)."""
+    for k in ("error", "error_message", "message", "detail", "failure_reason", "reason"):
+        v = st.get(k)
+        if v:
+            return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)[:300]
+    return json.dumps(st, ensure_ascii=False)[:300]
 
 
 def available() -> bool:
@@ -166,9 +177,10 @@ def generate(png: bytes, motion_prompt: str, *, duration: int | None = None,
             if not urls:
                 raise RuntimeError("완료됐는데 unsigned_urls 없음: " + json.dumps(st)[:300])
             cost = st.get("cost") or st.get("usage", {}).get("cost") or estimate_cost(duration or 5)
+            costmeter.add("video", float(cost))
             return urls[0], float(cost)
         if status in ("failed", "cancelled", "expired"):
-            raise RuntimeError(f"OpenRouter 영상 생성 실패({status}): " + json.dumps(st)[:300])
+            raise RuntimeError(f"OpenRouter 영상 생성 실패({status}): {_fail_reason(st)}")
         time.sleep(config.OPENROUTER_VIDEO_POLL_INTERVAL)
         waited += config.OPENROUTER_VIDEO_POLL_INTERVAL
     raise RuntimeError(f"OpenRouter 영상 폴링 시간초과({config.OPENROUTER_VIDEO_TIMEOUT}s)")

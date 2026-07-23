@@ -19,6 +19,7 @@ import urllib.request
 import uuid
 
 from . import config
+from . import costmeter
 
 # register_element가 load→modify→save를 락 없이 하면, 짧은 시간에 여러 등록 요청이 겹칠 때
 # (예: 이미지 여러 장을 연달아 확정) 뒤에 저장한 쪽이 앞선 쪽을 덮어써서 등록이 조용히
@@ -49,6 +50,7 @@ def chat(system: str, user: str, *, model: str | None = None, timeout: int = 240
             data = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"OpenRouter chat 오류 {e.code}: {e.read().decode('utf-8','replace')[:200]}") from e
+    costmeter.add("llm", float((data.get("usage") or {}).get("cost") or 0.0))
     return (data.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
 
 
@@ -907,6 +909,7 @@ def generate(prompt: str, *, model: str | None = None, aspect_ratio: str | None 
         raise RuntimeError("이미지 응답이 비어 있음: " + json.dumps(data)[:200])
     png = base64.b64decode(items[0]["b64_json"])
     cost = float((data.get("usage") or {}).get("cost") or 0.0)
+    costmeter.add("image", cost)
     return png, cost
 
 

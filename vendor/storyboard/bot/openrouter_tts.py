@@ -21,6 +21,7 @@ import urllib.error
 import urllib.request
 
 from . import config
+from . import costmeter
 
 _TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
 
@@ -80,7 +81,9 @@ def synthesize(text: str, *, voice: str | None = None, speed: float = 1.0) -> by
         method="POST")
     try:
         with urllib.request.urlopen(req, timeout=config.OPENROUTER_TTS_TIMEOUT) as r:
-            return r.read()
+            out = r.read()
+        costmeter.add("tts", 0.0)  # TTS는 응답이 raw PCM이라 비용 미제공 — 건수만 집계
+        return out
     except urllib.error.HTTPError as e:
         body_s = e.read().decode("utf-8", "replace")[:400]
         raise RuntimeError(f"OpenRouter TTS 오류 {e.code}: {body_s}") from e

@@ -8,9 +8,11 @@ import logging
 import os
 import re
 import threading
+import time
 
 import vendor.cowriter.bot.prompts as cw_prompts
 import vendor.storyboard.bot.config as sb_config
+import vendor.storyboard.bot.costmeter as costmeter
 import vendor.storyboard.bot.edit_plan as edit_plan
 import vendor.storyboard.bot.episode_compile as episode_compile
 import vendor.storyboard.bot.generator as sb_generator
@@ -22,8 +24,22 @@ import vendor.storyboard.bot.vp_store as vp_store
 
 from pipeline import jobs, parsing, project_setup, v3_schema
 
-# storyboard-bot 로거(uvicorn 출력에 propagate) — 실패를 조용히 삼키지 않고 원인을 로그에 남긴다.
+# storyboard-bot 로거 — uvicorn은 root에 INFO 핸들러를 안 달아 log.info가 안 보이므로(WARNING+만
+# lastResort로 stderr) 여기서 전용 StreamHandler를 INFO로 직접 붙인다. propagate=False로 root
+# lastResort와의 이중 출력을 막는다. 실패·계측을 조용히 삼키지 않고 stderr(=uvicorn 로그)에 남긴다.
 log = logging.getLogger("storyboard-bot")
+if not log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    log.addHandler(_h)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+
+def _fmt_elapsed(sec: float) -> str:
+    """초 → '12분 34초' / '45초' (사람이 읽는 소요시간)."""
+    sec = int(round(sec))
+    return f"{sec // 60}분 {sec % 60}초" if sec >= 60 else f"{sec}초"
 
 
 def _with_retry(fn, *args, retries: int = 1, **kwargs):
@@ -708,10 +724,11 @@ def ensure_scene_costumes(work: str, scene: dict, characters: list[dict] | None 
 # 콘티를 하나의 멀티샷 모션 프롬프트로 넘겨 클립당 영상 1개를 만든다(문서 '스틸'·'영상' 절).
 
 def _clip_ordinal(clip_id: str | None) -> int:
-    """'2-A' → 1, '2-B' → 2 (클립 안의 letter를 1부터의 정수로). 연속성 앵커 참조 텍스트의
-    'approved shot N' 라벨용 — generate_image_for_shot가 그 값을 int로 캐스팅하기 때문."""
-    letter = (clip_id or "").rsplit("-", 1)[-1].strip()[:1].upper()
-    return (ord(letter) - ord("A") + 1) if "A" <= letter <= "Z" else 0
+    """'2-1' → 1, '2-2' → 2 (컷 id의 끝 컷번호를 정수로). 연속성 앵커 참조 텍스트의
+    'approved shot N' 라벨용 — generate_image_for_shot가 그 값을 int로 캐스팅하기 때문.
+    ★2026-07-23 컷 단위 전환 후 컷 id는 '씬-컷번호'(숫자)라 trailing 정수를 파싱한다."""
+    tail = (clip_id or "").rsplit("-", 1)[-1].strip()
+    return int(tail) if tail.isdigit() else 0
 
 
 def _name_in_target(name: str, target: str) -> bool:
@@ -917,7 +934,7 @@ def produce_scene(work: str, scene: dict, episode: int = 1,
         clip_results[idx] = r
         notify(cid, r["status"])
 
-    vworkers = max(1, min(getattr(sb_config, "OPENROUTER_VIDEO_WORKERS", 2), len(clips) or 1))
+    vworkers = max(1, min(getattr(sb_config, "OPENROUTER_VIDEO_WORKERS", 3), len(clips) or 1))
     with concurrent.futures.ThreadPoolExecutor(max_workers=vworkers) as _vex:
         list(_vex.map(_one_clip, list(enumerate(clips))))
     clip_results = [r for r in clip_results if r]
@@ -972,26 +989,36 @@ def produce_episode_v3(work: str, script: str, skeleton_scenes: list[tuple[int, 
             results.append({"scene_num": scene_num, "state": "completed", "skipped": True})
             continue
 
-        # 미리보기(preview_scene_v3)에서 이미 상세 콘티·승인 스틸을 만든 씬이면 재사용한다 —
-        # 상세 블록 재생성(LLM)과 스틸 재생성(이미지)을 건너뛰어 비용·시간을 아낀다.
+        # 콘티 소스 우선순위(★2026-07-22 사용자 요청):
+        #   ① 검수용 상세콘티 파일(상세콘티/씬N.txt) — 사용자가 손으로 수정하면 그게 최우선 소스
+        #   ② 미리보기(preview_scene_v3) 상태의 conti_text
+        #   ③ 신규 LLM 생성(build_scene_blocks)
+        # 어느 경우든 상세 블록 재생성(LLM)을 건너뛰어 비용·시간을 아낀다. 승인 스틸은 콘티 소스와
+        # 무관하게 미리보기 상태에서 그대로 재사용한다(스틸 재생성 skip).
         preview = load_scene(scene_num) if load_scene else None
         scene = conti_text = None
         errors = []
         approved_stills = {}
-        if preview and preview.get("conti_text"):
-            parsed = parsing.split_scenes(preview["conti_text"])
+        # 승인 스틸 재사용 — 콘티를 파일에서 읽든 상태에서 읽든 공통 적용
+        for s in (preview.get("stills") if preview else None) or []:
+            if s.get("clip_id") and s.get("image"):
+                try:
+                    approved_stills[s["clip_id"]] = oi.data_url_to_png(s["image"])
+                except Exception:
+                    pass
+        # ① 파일 우선 → ② 미리보기 상태
+        edited = _load_conti_from_review(work, episode, scene_num)
+        src_text = edited or (preview.get("conti_text") if preview else None)
+        if src_text:
+            parsed = parsing.split_scenes(src_text)
             if parsed:
                 _, hdr, body = parsed[0]
                 scene = v3_schema.parse_scene(hdr, body)
-                conti_text = preview["conti_text"]
-                errors = []  # ★2026-07-22: 검증 제거(build_scene_blocks와 일관) — 미리보기 콘티를
+                conti_text = src_text
+                errors = []  # ★2026-07-22: 검증 제거(build_scene_blocks와 일관) — 기존 콘티를
                 # 재검증해 실패로 break하면 한 클립도 영상화 안 돼 "영상 클립 없다"가 뜨던 버그.
-                for s in preview.get("stills") or []:
-                    if s.get("clip_id") and s.get("image"):
-                        try:
-                            approved_stills[s["clip_id"]] = oi.data_url_to_png(s["image"])
-                        except Exception:
-                            pass
+                if edited and on_progress:
+                    on_progress(scene_num, None, "상세콘티 파일 사용(수정본)")
         if scene is None:
             if on_progress:
                 on_progress(scene_num, None, "상세 콘티 작성 중")
@@ -1175,6 +1202,11 @@ def produce_episode_v3_job(project: dict, episode: dict, job_id: str, save_fn=No
     characters = project.get("characters", [])
     mood = _project_mood(project)
     idea = project.get("idea") or project.get("logline") or ""
+    # ★2026-07-23: 1화 제작 총 소요시간·비용 계측. costmeter를 여기서 0으로 돌리고(에피소드 경계),
+    # 완료/실패 시 snapshot을 로그에 남긴다. 뼈대·상세콘티(LLM)+스틸·영상(이미지/영상)+합본(TTS)
+    # 모든 생성이 벤더 초크포인트에서 costmeter에 누적된다.
+    costmeter.reset()
+    _t0 = time.perf_counter()
     try:
         project_setup.ensure_project(work)
         script = episode.get("script")
@@ -1210,8 +1242,16 @@ def produce_episode_v3_job(project: dict, episode: dict, job_id: str, save_fn=No
         path = compile_episode_v3(work, idea, result["plan"], episode_title=f"{num}화")
         if save_fn:
             save_fn(compiled_path=path)
+        elapsed = time.perf_counter() - _t0
+        n_scenes = len(result.get("scenes") or [])
+        n_cuts = len(result.get("plan") or [])
+        log.info("✅ %s화 제작 완료 — 소요 %s · 비용 %s · 씬 %d · 컷 %d",
+                 num, _fmt_elapsed(elapsed), costmeter.format_summary(), n_scenes, n_cuts)
         jobs.update(job_id, status="done", stage="완료", video_path=path)
     except Exception as e:
+        elapsed = time.perf_counter() - _t0
+        log.info("❌ %s화 제작 실패 — 소요 %s · 그때까지 비용 %s · 원인: %s",
+                 num, _fmt_elapsed(elapsed), costmeter.format_summary(), e)
         jobs.update(job_id, status="error", stage="오류", error=str(e))
 
 
@@ -1815,6 +1855,17 @@ def _video_lock_prefix() -> str:
             + _VIDEO_CAMERA_LOCK + _VIDEO_STYLE_LOCK)
 
 
+# ★2026-07-23(co-writer-bot 조립 이식): 컷 내용 뒤에 붙는 공통 트레일링 — 표정은 미세·점진적으로만,
+# 그리고 컷 하나는 '한 번의 연속 샷'(장소·조명·프레이밍·배경 유지, 장면 전환/컷 전환 없음)임을 못박는다.
+_VIDEO_TRAILING = (
+    " Facial expression must stay subtle and natural — very minor, gradual expression change only, "
+    "no sudden or exaggerated emotional shifts. If the scene action describes a short continuous "
+    "progression (e.g., reaching for something and then making eye contact), animate that "
+    "progression naturally in sequence — this is one continuous shot, no camera cut, so keep the "
+    "exact same location, lighting, camera framing and background throughout, no scene change or "
+    "transition to a different setup.")
+
+
 # ★2026-07-22: 대사 없는 컷은 generate_audio=False — 자동 생성 음성이 'real person audio'
 # 안전필터에 걸리는 걸 회피(co-writer-bot HANDOFF_안전필터우회 이식). 대사 판정 정규식.
 _DIALOGUE_QUOTE_RE = re.compile(r"'[^']{2,}'|\"[^\"]{2,}\"|[‘“][^’”]{2,}[’”]|[「『][^」』]{2,}[」』]")
@@ -1857,26 +1908,32 @@ def generate_video_for_cut(work: str, scene_num: int, cut_num: int, png: bytes,
     _has_dlg = want_audio if want_audio is not None else _has_dialogue(motion_prompt)
     _wa = _has_dlg and sb_config.OPENROUTER_VIDEO_GENERATE_AUDIO
     # 대사 없는 컷은 입을 다물게(발화 입모양·립싱크 금지) — 없던 대사가 생기는 드리프트 방지.
+    # ★2026-07-23: co-writer-bot 문구로 통일 + 위치를 컷 내용 뒤로 이동(맨 앞이 아니라). 대사 컷은 빈 문자열.
     dialogue_lock = ("" if _has_dlg else
-                     "No one speaks in this cut — keep mouths closed and do NOT animate talking or "
-                     "lip-sync mouth shapes. ")
+                     "The character's lips stay closed together throughout, without forming any "
+                     "speech shapes or mouth movements — this cut carries no dialogue. ")
 
     def _gen_once(image_bytes, prompt):
         # _with_retry 재시도 없이 1회만 — 안전필터는 재시도해도 같은 결과라 낭비
-        return hf_video.generate(image_bytes, dialogue_lock + prompt,
+        return hf_video.generate(image_bytes, prompt,
                                  aspect_ratio="9:16", generate_audio=_wa)
 
     def _is_filter(e):
         return "InputImageSensitiveContentDetected" in str(e)
 
-    locked_prompt = _video_lock_prefix() + motion_prompt
+    # ★2026-07-23 조립 순서(co-writer-bot 이식): [잠금 접두: fiction·ref·정체성·카메라·화풍]
+    # → 컷 내용(motion_prompt) → dialogue_lock → 공통 트레일링(표정·연속샷). 안전필터 재시도
+    # 시에만 grid_anchor를 이 앞에 덧붙인다.
+    locked_prompt = (_video_lock_prefix() + motion_prompt + " " + dialogue_lock
+                     + _VIDEO_TRAILING).strip()
     grid_used = False
     try:
         url, cost = _gen_once(png, locked_prompt)
     except Exception as e:
         if not _is_filter(e):
             raise
-        # 안전필터 → 얼굴 격자로 재시도
+        # 안전필터 → 얼굴 격자로 재시도(실패는 아니지만 왜 이 컷이 느리거나 다르게 나오는지 진단용)
+        log.info("⚠ 안전필터 감지 (씬%s %s) — 얼굴 격자로 재시도합니다.", scene_num, unit)
         grid_anchor = (
             f"<<<{anchor_name}>>> is the clean approved start frame and must remain the exact "
             f"identity, costume, location, lighting, and screen-direction anchor.\n")
@@ -1947,6 +2004,7 @@ def generate_cuts_for_scene(work: str, scene_num: int, shots: list[dict],
             results.append({"cut_num": cut_num, "status": "ok", "video_path": path})
             notify("완료")
         except Exception as e:
+            log.exception("영상화 실패 (씬%s 컷%s): %s", scene_num, cut_num, e)
             results.append({"cut_num": cut_num, "status": "failed", "error": str(e)})
             notify(f"실패 — 건너뜀: {e}")
     return results
@@ -2264,6 +2322,23 @@ def _save_conti_for_review(work: str, episode: int, scene_num: int, conti_text: 
         pass
 
 
+def _load_conti_from_review(work: str, episode: int, scene_num: int) -> str | None:
+    """검수용 상세콘티 파일(outputs/<작품>/<N>화/상세콘티/씬N.txt)을 읽어 돌려준다.
+    ★2026-07-22 사용자 요청 — 이 파일을 손으로 수정하면 그 내용이 영상 생성의 콘티 소스가 된다(최우선).
+    없거나 비었거나 읽기 실패하면 None(→ 미리보기 상태 conti_text / 신규 LLM 생성으로 폴백)."""
+    try:
+        root = vp_store.out_root(work)
+        if not root:
+            return None
+        p = root / f"{episode}화" / "상세콘티" / f"씬{scene_num}.txt"
+        if not p.exists():
+            return None
+        text = p.read_text(encoding="utf-8").strip()
+        return text or None
+    except Exception:
+        return None
+
+
 def _find_v3_scene_clip(episode: dict, scene_num: int, clip_id: str):
     """v3_scenes의 그 씬 콘티를 파싱해 (scene_dict, clip_dict)를 돌려준다. 못 찾으면 (None, None)."""
     for s in (episode.get("v3_scenes") or []):
@@ -2358,6 +2433,7 @@ def videoize_cut_job(project: dict, episode: dict, job_id: str, save_fn=None, *,
                 pass  # 저장 실패해도 job엔 영상이 있으니 즉시 표시는 됨
         jobs.update(job_id, status="done", stage="완료", video_path=path)
     except Exception as e:
+        log.exception("컷 재영상화 실패 (씬%s 컷%s): %s", scene_num, cut_num, e)
         jobs.update(job_id, status="error", stage="오류", error=str(e))
 
 
