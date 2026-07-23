@@ -255,7 +255,7 @@ function renderScriptScenes(text, locked, names) {
     if (locked) {
       body = renderScriptMarkdown(bodyText, names);
     } else {
-      const rows = Math.min(40, Math.max(3, bodyText.split("\n").length));
+      const rows = Math.min(40, Math.max(8, bodyText.split("\n").length + 2));
       body = `<textarea class="scene-edit-area" data-seg="${i}" rows="${rows}" spellcheck="false"`
         + ` placeholder="대본을 입력하거나 🤖 AI 생성을 사용하세요">${escapeHtml(bodyText)}</textarea>`;
     }

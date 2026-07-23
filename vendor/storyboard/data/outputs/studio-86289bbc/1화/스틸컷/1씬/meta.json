@@ -1,0 +1,110 @@
+{
+ "clip1-1": {
+  "clip_id": "1-1",
+  "prompt": "무거운 밤, 진열대 정리"
+ },
+ "clip1-4": {
+  "clip_id": "1-4",
+  "prompt": "음료를 집다"
+ },
+ "clip1-3": {
+  "clip_id": "1-3",
+  "prompt": "어울리지 않는 남자"
+ },
+ "clip1-5": {
+  "clip_id": "1-5",
+  "prompt": "계산대로"
+ },
+ "clip1-6": {
+  "clip_id": "1-6",
+  "prompt": "어서 오세요"
+ },
+ "clip1-7": {
+  "clip_id": "1-7",
+  "prompt": "상품 대신 얼굴"
+ },
+ "clip1-8": {
+  "clip_id": "1-8",
+  "prompt": "표정이 굳다"
+ },
+ "clip1-2": {
+  "clip_id": "1-2",
+  "prompt": "태민이 걸어 들어오다"
+ },
+ "clip1-9": {
+  "clip_id": "1-9",
+  "prompt": "데리러 오나 해서요"
+ },
+ "clip1-11": {
+  "clip_id": "1-11",
+  "prompt": "손이 멈추다"
+ },
+ "clip1-10": {
+  "clip_id": "1-10",
+  "prompt": "계산만 하세요"
+ },
+ "clip1-15": {
+  "clip_id": "1-15",
+  "prompt": "좋은 부탁이 아니더라고요"
+ },
+ "clip1-12": {
+  "clip_id": "1-12",
+  "prompt": "부탁 하나"
+ },
+ "clip1-13": {
+  "clip_id": "1-13",
+  "prompt": "싫습니다"
+ },
+ "clip1-14": {
+  "clip_id": "1-14",
+  "prompt": "아직 말도 안 했는데요"
+ },
+ "clip1-16": {
+  "clip_id": "1-16",
+  "prompt": "처음 웃다"
+ },
+ "clip1-17": {
+  "clip_id": "1-17",
+  "prompt": "한 달만 (감정 정점)"
+ },
+ "clip1-19": {
+  "clip_id": "1-19",
+  "prompt": "원하는 만큼 드리죠"
+ },
+ "clip1-18": {
+  "clip_id": "1-18",
+  "prompt": "뭐라고요"
+ },
+ "clip1-20": {
+  "clip_id": "1-20",
+  "prompt": "미쳤어요"
+ },
+ "clip1-21": {
+  "clip_id": "1-21",
+  "prompt": "명함을 내려놓다"
+ },
+ "clip1-23": {
+  "clip_id": "1-23",
+  "prompt": "멀어지는 뒷모습"
+ },
+ "clip1-24": {
+  "clip_id": "1-24",
+  "prompt": "한숨과 명함"
+ },
+ "clip1-26": {
+  "clip_id": "1-26",
+  "prompt": "눈이 커지다"
+ },
+ "clip1-25": {
+  "clip_id": "1-25",
+  "prompt": "무심코 뒤집다"
+ },
+ "clip1-22": {
+  "clip_id": "1-22",
+  "prompt": "돌아서 나가다"
+ },
+ "clip1-27": {
+  "clip_id": "1-27",
+  "prompt": "뒷모습, 그리고 암전"
+ }
+}

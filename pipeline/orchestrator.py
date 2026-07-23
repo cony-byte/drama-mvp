@@ -1244,7 +1244,14 @@ def _ensure_v3_skeleton(episode: dict, script: str, num: int,
     src_sig = _script_signature(script)
     skeleton_text = episode.get("v3_skeleton")
     if skeleton_text and episode.get("v3_skeleton_src") == src_sig:
-        return skeleton_text                          # 대본 그대로 → 캐시 재사용(이어서 만들기 정상)
+        # ★2026-07-23: 대본 지문이 같아도 '캐시가 완전한지'까지 확인한다 — 저장된 뼈대가 잘려
+        # (예: 씬1·2만 있는데 scene_lines는 3씬) scene_lines의 씬을 다 포함 못 하면 재생성한다.
+        # (측정/produce가 서로 다른 시점에 뼈대를 저장하며 scene_lines와 어긋나 '씬N 못 찾음' 나던 버그)
+        parsed_nums = {n for n, _ in scene_skeleton_texts(skeleton_text)}
+        declared = {int(sn) for sn, _ in (episode.get("scene_lines") or []) if sn is not None}
+        if not declared or declared <= parsed_nums:
+            return skeleton_text                      # 캐시 완전 → 재사용(이어서 만들기 정상)
+        # 캐시가 선언 씬을 다 못 담음 → 아래로 떨어져 뼈대 재생성
     jobs.update(job_id, stage="화 전체 뼈대 설계 중")
     skeleton_text, sk_scenes, sk_errors = generate_episode_skeleton_validated(
         script, episode=num, characters=characters)

@@ -850,6 +850,7 @@ button#addEpisodeBtn {
 /* 씬 본문 바로 편집(미확정 기본 상태) */
 .scene-edit-area {
   width: 100%;
+  min-height: 160px;
   box-sizing: border-box;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.1);
