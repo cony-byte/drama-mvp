@@ -1096,27 +1096,15 @@ function _stillCardEl(c) {
   div.className = "still-card";
   div.dataset.scene = c.scene_num;
   div.dataset.cut = c.cut_num;
-  const busy = videoizingCuts.has(cutKey(c.scene_num, c.cut_num));
-  const hasVideo = !!c.video_path;
-  const media = hasVideo
-    ? `<video controls playsinline src="${cutVideoUrl(c.scene_num, c.cut_num)}"></video>`
-    : (c.image ? `<img src="${c.image}" alt="씬${c.scene_num} 컷${c.cut_num}">` : "");
-  const vLabel = busy ? "영상화 중…" : (hasVideo ? "🎬 다시 영상화" : "🎬 영상화");
+  // ★2026-07-23: per-컷 [영상화] 제거 — 영상화는 스틸 검수 후 [전체 영상화] 한 번으로만.
+  const media = c.image ? `<img src="${c.image}" alt="씬${c.scene_num} 컷${c.cut_num}">` : "";
   div.innerHTML = `
     <div class="still-media">${media}</div>
     <div class="still-title">씬${c.scene_num} · 컷${c.cut_num}</div>
     <div class="still-caption">${c.caption || ""}</div>
     <div class="still-cut-actions">
       <button type="button" class="text-btn cut-regen-btn">🔁 재생성</button>
-      <button type="button" class="text-btn cut-videoize-btn"${busy ? " disabled" : ""}>${vLabel}</button>
       <button type="button" class="text-btn cut-delete-btn">🗑️ 삭제</button>
-    </div>
-    <div class="cut-note hidden">
-      <textarea class="cut-note-textarea gen-note-textarea" rows="2" placeholder="영상에 반영할 의견(선택) — 예: 카메라 더 천천히, 표정 강조"></textarea>
-      <div class="gen-note-actions">
-        <button type="button" class="text-btn cut-note-cancel-btn">취소</button>
-        <button type="button" class="text-btn cut-note-submit-btn">🎬 영상 생성</button>
-      </div>
     </div>`;
   return div;
 }
@@ -1273,44 +1261,7 @@ $("stillsList").addEventListener("click", async (e) => {
     return;
   }
 
-  // 🎬 영상화(또는 다시 영상화) — 바로 만들지 않고 AI 생성과 같은 툴팁으로 의견을 먼저 묻는다.
-  if (e.target.closest(".cut-videoize-btn")) {
-    const box = card.querySelector(".cut-note");
-    if (box) {
-      box.classList.remove("hidden");
-      const ta = box.querySelector(".cut-note-textarea");
-      if (ta) ta.focus();
-    }
-    return;
-  }
-  if (e.target.closest(".cut-note-cancel-btn")) {
-    const box = card.querySelector(".cut-note");
-    if (box) { box.querySelector(".cut-note-textarea").value = ""; box.classList.add("hidden"); }
-    return;
-  }
-  if (e.target.closest(".cut-note-submit-btn")) {
-    const box = card.querySelector(".cut-note");
-    const note = box ? box.querySelector(".cut-note-textarea").value.trim() : "";
-    videoizingCuts.add(cutKey(sceneNum, cutNum));
-    renderStillsPage(); // "영상화 중…" 상태로 갱신(페이지를 넘겨도 유지)
-    try {
-      const q = note ? `?note=${encodeURIComponent(note)}` : "";
-      const res = await fetch(
-        `${base}/api/studio/${studioProjectId}/episodes/${currentEpisodeNum}/cuts/${sceneNum}/${cutNum}/videoize${q}`,
-        { method: "POST" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `서버 응답 오류 (${res.status})`);
-      }
-      const { job_id } = await res.json();
-      pollCutVideoJob(job_id, sceneNum, cutNum);
-    } catch (err) {
-      videoizingCuts.delete(cutKey(sceneNum, cutNum));
-      renderStillsPage();
-      alert(`영상화 실패: ${err.message}`);
-    }
-    return;
-  }
+  // ★2026-07-23: per-컷 영상화 핸들러 제거(전체 영상화만 사용).
 
   if (e.target.closest(".cut-delete-btn")) {
     if (!confirm(`씬${sceneNum} · 컷${cutNum}을 삭제할까요? 다시 만들려면 "씬 만들기"를 눌러야 해요.`)) return;

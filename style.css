@@ -87,7 +87,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 주요 CTA — 그라데이션 + 부드러운 그림자 */
 button#startChatBtn, button#restartBtn, button#errorRetryBtn, button#finalizeBtn,
 button#nextStageBtn, button#goToStudioBtn,
-button#makeDramaBtn, button#makeVideoFromStillsBtn, button#v3PreviewBtn {
+button#makeDramaBtn, button#makeVideoFromStillsBtn, button#v3PreviewBtn, button#v3ProduceBtn {
   width: 100%;
   padding: 16px;
   border-radius: 14px;
