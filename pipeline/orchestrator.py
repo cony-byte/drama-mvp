@@ -2537,6 +2537,43 @@ def generate_stills_for_scene(project: dict, episode: dict, job_id: str, save_fn
 def regenerate_cut_still(project: dict, episode: dict, scene_num: int, cut_num: int) -> dict:
     """미리보기의 특정 컷 이미지만 다시 생성 → 갱신된 still 항목(dict) 반환."""
     work = project["work"]
+    # ★2026-07-23: v3.1(상세콘티 clips) 화면 컷은 구 shots_by_scene에 없다("컷을 찾을 수 없어요" 502
+    # 버그) — v3_scenes/conti에서 컷을 찾아 pseudo-shot으로 재생성하고 디스크(clip{id}.png)까지
+    # 덮어써 영상 생성에도 반영한다. 재생성 전 의상/장소/소품 참조도 보강(누락 시 생성).
+    num = episode.get("num", 1)
+    rec = _v3_scene_map(episode).get(int(scene_num)) or {}
+    # v3 판정은 v3_scenes state가 아니라 '상세콘티 존재'로 한다 — 미리보기만 한 화는 v3_scenes가
+    # 비어 있어도 디스크에 상세콘티가 있고 scene_stills에 clip_id가 붙는다(실측: state 0인데 콘티 있음).
+    src = _load_conti_from_review(work, num, scene_num) or rec.get("conti_text")
+    if src:
+        parsed = parsing.split_scenes(src)
+        if parsed:
+            _, hdr, body = parsed[0]
+            scene = v3_schema.parse_scene(hdr, body)
+            clips = scene.get("clips") or []
+            clip = next((c for c in clips if _clip_ordinal(c.get("clip_id")) == cut_num), None)
+            if clip:
+                characters = project.get("characters") or []
+                mood = _project_mood(project)
+                try:
+                    ensure_scene_costumes(work, scene, characters=characters, mood=mood)
+                    ensure_scene_references(work, scene, mood=mood, conti_body=src)
+                except Exception:
+                    log.exception("재생성 전 참조 보강 실패(계속 진행)")
+                prev_id = next((c.get("clip_id") for c in clips
+                                if _clip_ordinal(c.get("clip_id")) == cut_num - 1), None)
+                prev_png = _existing_still_png(work, num, scene_num, prev_id) if prev_id else None
+                png, _cost = generate_clip_still(scene, clip, work=work,
+                                                 characters=characters, continuity_png=prev_png)
+                try:
+                    vp_store.save_still(work, scene_num=scene_num, prompt_summary=clip.get("label", ""),
+                                        png=png, episode=num, clip_id=clip.get("clip_id"))
+                except Exception:
+                    log.exception("재생성 스틸 디스크 저장 실패(화면 표시는 됨)")
+                return {"scene_num": scene_num, "cut_num": cut_num, "clip_id": clip.get("clip_id"),
+                        "caption": clip.get("label", ""), "prompt": "",
+                        "image": oi.png_data_url(png), "video_path": None, "representative": True}
+        raise RuntimeError(f"씬{scene_num} 컷{cut_num}을 찾을 수 없어요.")
     scenes = _norm_scenes(episode.get("scenes") or [])
     shots_by_scene = _restore_costume_assignments(
         scenes, _norm_shots(episode.get("shots_by_scene") or {}))
