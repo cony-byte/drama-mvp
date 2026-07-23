@@ -334,6 +334,10 @@ const views = {
 };
 
 function showView(name) {
+  // ★2026-07-23: 생성 job 뷰(stills/progress)가 아닌 곳으로 이동하면 살아있는 폴링을 끊는다.
+  // (안 끊으면 pollJob이 3초마다 showView("stills")로 화면을 끌고 가서 — 작품 목록에서 작품을
+  //  눌러도 옛 job의 스틸 뷰로 튀거나 클릭이 씹히는 것처럼 보이던 버그.)
+  if (name !== "stills" && name !== "progress") stopPolling();
   for (const v of Object.values(views)) v.classList.add("hidden");
   views[name].classList.remove("hidden");
 }
