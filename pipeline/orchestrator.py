@@ -602,23 +602,30 @@ def generate_scene_plan(script: str, episode: int = 1,
 # (generate_stills_for_scene 등)은 건드리지 않고 v3.1 스키마 위에 추가로 쌓는다.
 
 def generate_episode_skeleton(script: str, episode: int = 1,
-                              characters: list[dict] | None = None) -> str:
+                              characters: list[dict] | None = None,
+                              honest_timing: bool = False) -> str:
     """3단계: 화 전체 뼈대(씬 나누기, 등장·의상·장소·무드·소품·액션라인 확정, 클립 분할·초
     배분) 텍스트를 생성. 이 단계는 이미지·영상은 물론 컷 상세([N초] 자세·동작 서술)도 만들지
-    않는다 — 그건 5단계(씬별 상세 블록)의 몫."""
+    않는다 — 그건 5단계(씬별 상세 블록)의 몫.
+    honest_timing=True면 90~120초 캡을 풀고 실제 필요한 초를 배분(분량 측정 전용, 제작엔 안 씀)."""
     return _with_retry(
         _sb_complete,
-        sb_prompts.episode_skeleton_system(bible=characters_bible(characters)),
+        sb_prompts.episode_skeleton_system(bible=characters_bible(characters),
+                                           honest_timing=honest_timing),
         sb_prompts.episode_skeleton_user(script)).strip()
 
 
 def generate_episode_skeleton_validated(
         script: str, episode: int = 1,
-        characters: list[dict] | None = None) -> tuple[str, list[dict], list[str]]:
+        characters: list[dict] | None = None,
+        honest_timing: bool = False) -> tuple[str, list[dict], list[str]]:
     """3단계 뼈대를 생성 + 파싱·검증. 반환: (뼈대 원문 text, scenes, errors). 뼈대 원문을 그대로
     돌려주는 이유는 5단계(scene_skeleton_texts로 씬별 뼈대 텍스트를 잘라 build_scene_blocks에
-    넘김)에 그 원문이 필요하기 때문이다."""
-    text = generate_episode_skeleton(script, episode=episode, characters=characters)
+    넘김)에 그 원문이 필요하기 때문이다.
+    honest_timing=True면 분량 측정 전용(캡 없는 실제 필요 초). 이 경우 총초>120이어도 정상이므로
+    타이밍 오류는 측정 쪽에서 무시된다."""
+    text = generate_episode_skeleton(script, episode=episode, characters=characters,
+                                     honest_timing=honest_timing)
     scene_tuples = parsing.split_scenes(text)
     scenes = [v3_schema.parse_scene(hdr, body) for _, hdr, body in scene_tuples]
     for s in scenes:

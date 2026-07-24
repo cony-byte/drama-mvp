@@ -1068,12 +1068,26 @@ EPISODE_SKELETON_ROLE = """너는 v3.1 콘티 변환 규칙에 따라 대본 전
 - 대본의 사건 순서를 바꾸지 않는다. 대사 자체는 이 단계에서 쓰지 않는다(선언·초 배분만)."""
 
 
-def episode_skeleton_system(bible: dict | None = None) -> str:
-    """v3.1 3단계: 화 전체 뼈대(씬 분할 + 선언 + 씬 총초, 컷 없음) 시스템 프롬프트."""
+# ★분량 측정 전용 오버라이드(honest_timing) — [확정] 게이트가 '대본이 실제로 몇 초인지'를 재려면
+# [4]의 '총합 90~120초' 캡을 무시하고 각 씬에 정직하게 필요한 초를 배분해야 한다. 이 스켈레톤은
+# 측정에만 쓰고 제작(≤120초 캡)에는 쓰지 않는다 — 그래서 캐시도 v3_skeleton과 분리한다.
+EPISODE_SKELETON_HONEST_OVERRIDE = """[★★분량 측정 모드 — 위 규칙보다 우선]
+- 이번 출력은 '대본이 실제로 몇 초짜리인지' 재는 용도다. [4. 씬 러닝타임 배분]의 '총합 반드시
+  90~120초' 제약을 **무시**하라. 총초 합에 상한을 두지 마라.
+- 각 씬에 대사·사건·행동을 자연스러운 호흡으로 담는 데 **실제로 필요한 초**를 정직하게 배분하라.
+  내용을 압축·삭제하거나 초를 억지로 줄이지 마라 — 대본이 길면 총초도 길게 나와야 한다.
+- ⚠️ 코멘트로 때우지 말고, 필요한 시간을 그대로 씬 헤더의 초로 적어라."""
+
+
+def episode_skeleton_system(bible: dict | None = None, honest_timing: bool = False) -> str:
+    """v3.1 3단계: 화 전체 뼈대(씬 분할 + 선언 + 씬 총초, 컷 없음) 시스템 프롬프트.
+    honest_timing=True면 90~120초 캡을 풀고 실제 필요한 초를 정직하게 배분(분량 측정 전용)."""
     s = EPISODE_SKELETON_ROLE
     if bible and bible.get("characters"):
         names = ", ".join(bible["characters"].keys())
         s += f"\n\n[등록된 엘리먼트 — 인물 이름] {names}"
+    if honest_timing:
+        s += "\n\n" + EPISODE_SKELETON_HONEST_OVERRIDE
     return s
 
 

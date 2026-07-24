@@ -21,14 +21,17 @@ def measure(script: str, episode: int = 1, characters: list[dict] | None = None,
     """스켈레톤으로 화 전체 러닝타임을 측정. 반환:
     {total, min, max, target, verdict('ok'|'over'|'under'), scenes:[{num,seconds,title}], skeleton}
     ★skeleton_text가 주어지면(대본이 안 바뀌어 캐시된 뼈대) 그걸 파싱만 해 LLM 없이 즉시 측정한다.
-    없으면 LLM 1회(generate_episode_skeleton)로 새로 만든다 — 매 클릭 재생성/느린 터널 타임아웃 방지."""
+    없으면 LLM 1회로 새로 만든다 — 매 클릭 재생성/느린 터널 타임아웃 방지.
+    ★측정 스켈레톤은 honest_timing=True(90~120초 캡 없이 실제 필요 초)로 만든다. 캡을 건 제작용
+    스켈레톤을 쓰면 긴 대본도 90~120초로 눌러담겨 항상 'ok'가 나오기 때문(측정 무의미). 이 정직
+    스켈레톤은 측정 전용이며, 제작(≤120초)에는 별도로 캡 걸린 스켈레톤을 쓴다."""
     if skeleton_text:
         text = skeleton_text
         scenes = [v3_schema.parse_scene(hdr, body)
                   for _, hdr, body in orch.parsing.split_scenes(text)]
     else:
         text, scenes, _errors = orch.generate_episode_skeleton_validated(
-            script, episode=episode, characters=characters)
+            script, episode=episode, characters=characters, honest_timing=True)
     per = [{"num": s.get("scene_num"),
             "seconds": round(s.get("declared_seconds") or 0, 1),
             "title": s.get("title")} for s in scenes]

@@ -477,12 +477,14 @@ def studio_measure_duration(project_id: str, num: int):
         raise HTTPException(404, "화를 찾을 수 없어요.")
     if not (episode.get("script") or "").strip():
         raise HTTPException(400, "대본이 먼저 있어야 분량을 잴 수 있어요.")
-    # ★2026-07-23: 대본이 안 바뀌었으면(뼈대 지문 일치) 캐시된 v3_skeleton으로 LLM 없이 즉시 측정
-    # — 매 클릭 재생성으로 느린 터널에서 60초+ 걸려 "측정 실패"로 보이던 문제. 새로 만들면 저장해
-    # 이후 [드라마 만들기](produce)도 그대로 재사용한다.
+    # ★2026-07-24: 측정 스켈레톤(honest_timing, 90~120 캡 없음)을 제작용 v3_skeleton과 분리 캐시한다.
+    # 측정 스켈레톤은 '실제 필요 초'를 정직하게 배분하므로 긴 대본이면 총초>120이 나온다 — 이걸
+    # 제작(≤120 캡)에 재사용하면 300초짜리 영상이 나오므로 절대 v3_skeleton에 넣지 않는다.
+    # 대본이 안 바뀌었으면(지문 일치) 캐시된 측정 뼈대로 LLM 없이 즉시 측정(느린 터널 타임아웃 방지).
     script = episode["script"]
     sig = _script_signature(script)
-    cached = episode.get("v3_skeleton") if episode.get("v3_skeleton_src") == sig else None
+    cached = (episode.get("v3_skeleton_measure")
+              if episode.get("v3_skeleton_measure_src") == sig else None)
     try:
         result = duration_gate.measure(script, episode=num,
                                        characters=project.get("characters") or [],
@@ -491,8 +493,8 @@ def studio_measure_duration(project_id: str, num: int):
         # 원시 500은 CORS 헤더가 안 붙어 브라우저에 "Failed to fetch"로만 보인다 — 감싸서 전달.
         raise HTTPException(500, f"분량 측정에 실패했어요: {e}")
     if not cached:
-        studio.update_episode(project_id, num, v3_skeleton=result["skeleton"],
-                              v3_skeleton_src=sig, v3_scenes=[])
+        studio.update_episode(project_id, num, v3_skeleton_measure=result["skeleton"],
+                              v3_skeleton_measure_src=sig)
     return result
 
 
@@ -516,6 +518,35 @@ def studio_autofit_duration(project_id: str, num: int, req: AutofitRequest):
     return result
 
 
+def _refresh_prior_summaries(project_id: str, project: dict, target_num: int) -> None:
+    """target_num 이전 화들의 요약을 '실제 대본' 기준으로 최신화한다(연속성용, 2026-07-24).
+
+    studio_script_bible이 이전 화의 ep["summary"]를 '이전 화 대본 요약'으로 그대로 쓰는데, 이
+    summary가 (a) 대본 쓰기 전 개요이거나 (b) 대본을 편집한 뒤 낡았으면 다음 화가 이전 화의 실제
+    내용을 반영하지 못한다. 요약이 없거나 대본 해시와 어긋나면 실제 대본을 요약해 저장 + 해시 각인.
+    이미 대본 기준 최신 요약(해시 일치)이면 LLM 호출 없이 건너뛴다.
+    project(in-memory dict)도 갱신해 곧바로 studio_script_bible에 반영되게 한다."""
+    for ep in project.get("episodes") or []:
+        num = ep.get("num")
+        if not isinstance(num, int) or num >= target_num:
+            continue
+        script = (ep.get("script") or "").strip()
+        if not script:
+            continue
+        sig = _script_signature(script)
+        if ep.get("summary") and ep.get("summary_src_hash") == sig:
+            continue  # 이미 이 대본 기준 요약 — 그대로 둠
+        try:
+            summ = generate_episode_summary(script)
+        except Exception:
+            continue  # 요약 실패는 대본 생성을 막지 않는다(개요 폴백)
+        if not summ or looks_like_clarification(summ):
+            continue
+        ep["summary"] = summ
+        ep["summary_src_hash"] = sig
+        studio.update_episode(project_id, num, summary=summ, summary_src_hash=sig)
+
+
 @app.post("/api/studio/{project_id}/episodes/{num}/generate-script")
 def studio_generate_script(project_id: str, num: int, req: GenerateNoteRequest = GenerateNoteRequest()):
     """이 화 대본을 AI로 (재)생성. 이 화에 지정된 등장인물이 있으면 그 캐릭터들로,
@@ -529,8 +560,22 @@ def studio_generate_script(project_id: str, num: int, req: GenerateNoteRequest =
     idea = project.get("idea") or project["logline"]
     ep_char_ids = set(episode.get("character_ids") or [])
     chars = [c for c in project["characters"] if c.get("id") in ep_char_ids] or project["characters"]
-    # 요약이 없으면 전체 줄거리에서 이번 화 개요를 먼저 만든다. 그 개요를 포함한 전체 작품
-    # 바이블(모든 캐릭터·이전 화 요약·직전 엔딩)을 조립한 뒤 대본을 생성한다.
+    # ── 연속성 준비(2026-07-24) ─────────────────────────────────────────────
+    # (1) 전체 줄거리(synopsis)가 비어 있으면(온보딩 스킵 등) 먼저 만들어 둔다 — 없으면 바이블의
+    #     '## 줄거리'가 통째로 비어 전체 아크/이전 맥락이 프롬프트에서 빠진다.
+    if not (project.get("synopsis") or "").strip():
+        try:
+            syn = generate_synopsis(idea, project.get("logline", ""), project.get("characters", []))
+            if syn and not looks_like_clarification(syn):
+                studio.update_project(project_id, synopsis=syn)
+                project["synopsis"] = syn
+        except Exception:
+            pass  # 실패해도 대본 생성 자체는 막지 않는다
+    # (2) 이전 화 요약을 실제 대본 기준으로 최신화(개요·낡은 요약 → 실제 대본 요약). 이래야 다음 화가
+    #     이전 화의 진짜 내용을 반영한다.
+    _refresh_prior_summaries(project_id, project, num)
+    # 이번 화 요약이 없으면 전체 줄거리에서 이번 화 개요를 먼저 만든다(대본의 뼈대). 그 개요를 포함한
+    # 전체 작품 바이블(모든 캐릭터·이전 화 요약·직전 엔딩)을 조립한 뒤 대본을 생성한다.
     summary = episode.get("summary") or ""
     if not summary:
         summary = generate_episode_plan_summary(
@@ -548,6 +593,15 @@ def studio_generate_script(project_id: str, num: int, req: GenerateNoteRequest =
     if looks_like_clarification(script):
         raise HTTPException(422, f"AI가 의견 내용을 확인해달라고 해요 — 의견을 더 명확하게 적어주세요.\n\n{script}")
     studio.update_episode(project_id, num, script=script)
+    # (3) 생성된 실제 대본으로 이번 화 요약을 덮어써 저장 — 다음 화가 이 화의 실제 내용을 참조하게.
+    #     (개요는 대본 생성의 뼈대였을 뿐, 저장 요약은 실제 결과물을 반영해야 연속성이 맞는다.)
+    try:
+        real_summary = generate_episode_summary(script)
+        if real_summary and not looks_like_clarification(real_summary):
+            studio.update_episode(project_id, num, summary=real_summary,
+                                  summary_src_hash=_script_signature(script))
+    except Exception:
+        pass  # 요약 실패해도 대본은 이미 저장됨
     return studio.get_episode(project_id, num)
 
 
