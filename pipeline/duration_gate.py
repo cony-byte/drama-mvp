@@ -12,8 +12,9 @@ from __future__ import annotations
 from . import v3_schema
 from . import orchestrator as orch
 
-# 목표 러닝타임 — 범위(90~120) 중앙보다 살짝 아래로 두어 자동맞춤이 상한을 넘지 않게 한다.
-TARGET_SECONDS = 100
+# 목표 러닝타임 — 화당 분량 목표를 상한(120초)에 맞춘다. 압축이 100초로 깎아 너무 짧아지던 문제로
+# 2026-07-24 100→120으로 올림. 압축 프롬프트는 "최대 120초"를 함께 지시해 상한을 넘지 않게 한다.
+TARGET_SECONDS = 120
 
 
 def measure(script: str, episode: int = 1, characters: list[dict] | None = None,
