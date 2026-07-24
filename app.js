@@ -476,12 +476,14 @@ async function pollJob(jobId) {
         const grew = stills.length !== _lastStillsLen;
         _lastStillsLen = stills.length;
         if (grew) {
-          _setStillsData(stills);   // 데이터만 갱신(내비게이션 시 최신 반영)
-          // ★이미 실제 카드를 보고 있으면 다시 그리지 않는다 → 새 컷 생겨도 화면이 안 튄다.
-          //   로딩/"+" 빈 상태일 때만 첫 렌더로 현재 씬 콘텐츠를 채운다.
-          if (!$("stillsList").querySelector(".still-media img")) renderStillsPage();
+          _setStillsData(stills);   // 데이터는 항상 최신화(누적) — 나중에 씬 넘길 때 최신 반영
+          // ★사용자가 ◀/▶로 씬을 넘겨 보는 중이면(stillsFollow=false) 폴링이 화면을 다시 그리지
+          //   않는다 → 씬2 생성 중에도 보던 씬1에 그대로 머문다. 자동추적 중일 때만, 그리고 로딩/"+"
+          //   빈 상태일 때만 첫 렌더로 현재 씬을 채운다(이미 카드 보고 있으면 안 튐).
+          if (stillsFollow && !$("stillsList").querySelector(".still-media img")) renderStillsPage();
         }
-      } else if (job.status !== "done") {
+      } else if (job.status !== "done" && stillsFollow) {
+        // 생성 초기(스틸 0개) 로딩 표시 — 단, 사용자가 다른 씬을 보고 있으면 그 화면을 안 덮는다.
         renderStillsLoading(job.stage || "생성 중…");
       }
     } else if (job.status === "running") {
@@ -981,6 +983,7 @@ function startJob(endpoint, mode, prepMsg, query) {
       // 파이프라인(참조 생성·붙이기·상세 콘티 분할)이 도는 동안 폴링이 완성된 컷부터 노출한다.
       if (mode === "stills") {
         _lastStillsLen = -1;  // 새 생성 시작 — 씬/컷 위치는 유지(자동 이동 안 함, 사용자가 보던 자리 그대로)
+        stillsFollow = true;  // 새 생성은 자동 추적(생성 중 씬 표시). 사용자가 ◀/▶로 넘기면 해제된다.
         showView("stills");
         renderStillsLoading(prepMsg);
       } else {
