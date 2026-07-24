@@ -607,7 +607,7 @@ def generate_episode_skeleton(script: str, episode: int = 1,
     """3단계: 화 전체 뼈대(씬 나누기, 등장·의상·장소·무드·소품·액션라인 확정, 클립 분할·초
     배분) 텍스트를 생성. 이 단계는 이미지·영상은 물론 컷 상세([N초] 자세·동작 서술)도 만들지
     않는다 — 그건 5단계(씬별 상세 블록)의 몫.
-    honest_timing=True면 90~120초 캡을 풀고 실제 필요한 초를 배분(분량 측정 전용, 제작엔 안 씀)."""
+    honest_timing=True면 러닝타임 캡을 풀고 실제 필요한 초를 배분(분량 측정 전용, 제작엔 안 씀)."""
     return _with_retry(
         _sb_complete,
         sb_prompts.episode_skeleton_system(bible=characters_bible(characters),

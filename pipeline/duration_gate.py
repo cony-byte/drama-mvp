@@ -1,7 +1,7 @@
 """[확정] → 스켈레톤 분량 게이트 (2026-07-23, project_drama_duration_gate 구현).
 
 대본 '확정' 시점에 스켈레톤(3단계 뼈대)을 생성해 씬별 declared_seconds 합으로 화 전체
-러닝타임을 측정하고 90~120초(v3_schema.EPISODE_SECONDS_MIN/MAX) 게이트를 판정한다.
+러닝타임을 측정하고 90~130초(v3_schema.EPISODE_SECONDS_MIN/MAX, 목표 120초) 게이트를 판정한다.
 범위를 벗어나면 AI 자동맞춤을 제안한다: 길면 압축(compress) → 압축해도 안 되면 분할(split),
 짧으면 확장(expand). script_source 플래그 없이 '확정' 시점에 모든 대본을 일괄 측정한다.
 
@@ -23,9 +23,9 @@ def measure(script: str, episode: int = 1, characters: list[dict] | None = None,
     {total, min, max, target, verdict('ok'|'over'|'under'), scenes:[{num,seconds,title}], skeleton}
     ★skeleton_text가 주어지면(대본이 안 바뀌어 캐시된 뼈대) 그걸 파싱만 해 LLM 없이 즉시 측정한다.
     없으면 LLM 1회로 새로 만든다 — 매 클릭 재생성/느린 터널 타임아웃 방지.
-    ★측정 스켈레톤은 honest_timing=True(90~120초 캡 없이 실제 필요 초)로 만든다. 캡을 건 제작용
-    스켈레톤을 쓰면 긴 대본도 90~120초로 눌러담겨 항상 'ok'가 나오기 때문(측정 무의미). 이 정직
-    스켈레톤은 측정 전용이며, 제작(≤120초)에는 별도로 캡 걸린 스켈레톤을 쓴다."""
+    ★측정 스켈레톤은 honest_timing=True(캡 없이 실제 필요 초)로 만든다. 캡을 건 제작용 스켈레톤을
+    쓰면 긴 대본도 범위 안으로 눌러담겨 항상 'ok'가 나오기 때문(측정 무의미). 이 정직 스켈레톤은
+    측정 전용이며, 제작(≤130초)에는 별도로 캡 걸린 스켈레톤을 쓴다."""
     if skeleton_text:
         text = skeleton_text
         scenes = [v3_schema.parse_scene(hdr, body)
