@@ -601,18 +601,42 @@ def generate_scene_plan(script: str, episode: int = 1,
 # 기존 generate_scene_plan(위)과 별개의 새 경로다 — 기존 shot 기반 파이프라인
 # (generate_stills_for_scene 등)은 건드리지 않고 v3.1 스키마 위에 추가로 쌓는다.
 
+_SCENE_HDR_RE = re.compile(r'^\s*\*{0,2}\s*(\d+)\s*[.．]\s*(.+?)\s*\*{0,2}\s*$')
+
+
+def _parse_script_scene_headers(script: str) -> list[tuple[int, str]]:
+    """대본에서 번호 붙은 씬 헤더(`N. 장소 / 시간`, `*N. …*`, `**N. …**`)를 순서대로 뽑는다.
+    장소/시간 구분('/')이 있는 헤더만 인정해 오탐(번호 붙은 대사 등)을 줄인다. 번호가 1..N로
+    정확히 이어질 때만 신뢰(중간 불일치·2개 미만이면 빈 리스트 → 스켈레톤이 LLM 판단대로).
+    스켈레톤이 (계속)/(이어서) 씬을 뭉쳐 씬 수가 줄던 문제를 막기 위해 '정확히 이 N개 씬' 강제에 쓴다."""
+    heads: list[tuple[int, str]] = []
+    for ln in script.splitlines():
+        m = _SCENE_HDR_RE.match(ln)
+        if not m:
+            continue
+        title = m.group(2).strip().strip('*').strip()
+        if '/' not in title or len(title) > 80:
+            continue
+        heads.append((int(m.group(1)), title))
+    if len(heads) < 2 or [n for n, _ in heads] != list(range(1, len(heads) + 1)):
+        return []
+    return heads
+
+
 def generate_episode_skeleton(script: str, episode: int = 1,
                               characters: list[dict] | None = None,
                               honest_timing: bool = False) -> str:
     """3단계: 화 전체 뼈대(씬 나누기, 등장·의상·장소·무드·소품·액션라인 확정, 클립 분할·초
     배분) 텍스트를 생성. 이 단계는 이미지·영상은 물론 컷 상세([N초] 자세·동작 서술)도 만들지
     않는다 — 그건 5단계(씬별 상세 블록)의 몫.
-    honest_timing=True면 러닝타임 캡을 풀고 실제 필요한 초를 배분(분량 측정 전용, 제작엔 안 씀)."""
+    honest_timing=True면 러닝타임 캡을 풀고 실제 필요한 초를 배분(분량 측정 전용, 제작엔 안 씀).
+    대본 씬 헤더를 파싱해 '정확히 이 N개 씬' 강제(LLM이 (계속) 씬을 뭉쳐 씬 수가 줄던 문제 방지)."""
+    heads = _parse_script_scene_headers(script)
     return _with_retry(
         _sb_complete,
         sb_prompts.episode_skeleton_system(bible=characters_bible(characters),
                                            honest_timing=honest_timing),
-        sb_prompts.episode_skeleton_user(script)).strip()
+        sb_prompts.episode_skeleton_user(script, scene_headers=heads)).strip()
 
 
 def generate_episode_skeleton_validated(
@@ -1256,9 +1280,13 @@ def _ensure_v3_skeleton(episode: dict, script: str, num: int,
         # (측정/produce가 서로 다른 시점에 뼈대를 저장하며 scene_lines와 어긋나 '씬N 못 찾음' 나던 버그)
         parsed_nums = {n for n, _ in scene_skeleton_texts(skeleton_text)}
         declared = {int(sn) for sn, _ in (episode.get("scene_lines") or []) if sn is not None}
-        if not declared or declared <= parsed_nums:
+        # ★2026-07-24: 대본의 씬 헤더 수보다 캐시 뼈대의 씬이 적으면(예전 뼈대가 (계속) 씬을 뭉쳐
+        # 씬 수가 줄어든 상태) 재사용하지 말고 재생성해 씬 수를 대본에 맞춘다(자가복구).
+        script_scene_count = len(_parse_script_scene_headers(script))
+        cache_short = bool(script_scene_count) and len(parsed_nums) < script_scene_count
+        if (not declared or declared <= parsed_nums) and not cache_short:
             return skeleton_text                      # 캐시 완전 → 재사용(이어서 만들기 정상)
-        # 캐시가 선언 씬을 다 못 담음 → 아래로 떨어져 뼈대 재생성
+        # 캐시가 선언 씬/대본 씬을 다 못 담음 → 아래로 떨어져 뼈대 재생성
     jobs.update(job_id, stage="화 전체 뼈대 설계 중")
     skeleton_text, sk_scenes, sk_errors = generate_episode_skeleton_validated(
         script, episode=num, characters=characters)

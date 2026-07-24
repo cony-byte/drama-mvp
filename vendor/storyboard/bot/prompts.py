@@ -1093,9 +1093,20 @@ def episode_skeleton_system(bible: dict | None = None, honest_timing: bool = Fal
     return s
 
 
-def episode_skeleton_user(script: str) -> str:
-    return (f"아래 [대본] 전체를 v3.1 씬 뼈대로 설계하라. 컷 마커·컷 상세는 절대 쓰지 마라 — "
-            f"씬 헤더·선언 라인까지만.\n\n[대본]\n{script}")
+def episode_skeleton_user(script: str, scene_headers: list | None = None) -> str:
+    """scene_headers([(번호, '장소 / 시간'), ...])가 주어지면 '정확히 이 N개 씬 그대로' 유지하도록
+    강제한다. 대본에 장소·시간이 다른 씬이 여럿인데 LLM이 (계속)/(이어서)를 같은 씬으로 뭉쳐
+    씬 수가 줄던 문제(4씬 대본→1~2씬 뼈대) 방지."""
+    base = ("아래 [대본] 전체를 v3.1 씬 뼈대로 설계하라. 컷 마커·컷 상세는 절대 쓰지 마라 — "
+            "씬 헤더·선언 라인까지만.")
+    if scene_headers:
+        lines = "\n".join(f"- 씬{n}: {t}" for n, t in scene_headers)
+        base += (f"\n\n[★대본 씬 구성 — 반드시 이 {len(scene_headers)}개 씬 그대로 유지]\n"
+                 f"이 대본은 정확히 {len(scene_headers)}개 씬으로 되어 있다:\n{lines}\n"
+                 f"뼈대도 **정확히 이 {len(scene_headers)}개 씬**으로 만들어라 — 씬 번호·경계 그대로. "
+                 f"장소나 시간이 다르면 절대 합치지 말고, '(계속)'·'(이어서)'가 붙은 씬도 각각 별도 "
+                 f"씬으로 유지하라(합치거나 개수를 바꾸지 마라).")
+    return base + f"\n\n[대본]\n{script}"
 
 
 # ── 파이프라인 5단계: 씬 하나를 컷으로 쪼개 채우기 (콘티변환규칙 v3.2 이식) ─────
