@@ -1649,12 +1649,16 @@ function renderGateVerdict(m) {
   }
   if (m.verdict === "over") {
     gateShow(gateBubble(
-      `지금 대본은 약 <b>${m.total}초</b>예요 (권장 ${m.min}~${m.max}초보다 길어요).<br><small>${gateScenes(m)}</small><br>제가 약 ${m.target}초로 <b>압축</b>해드릴까요?`,
-      [{ act: "compress", label: "👌 압축해줘", primary: true }, { act: "confirm-anyway", label: "그냥 이대로 확정" }]));
+      `지금 대본은 약 <b>${m.total}초</b> 분량이에요 (권장 ${m.min}~${m.max}초보다 길어요).<br><small>${gateScenes(m)}</small><br>제가 약 ${m.target}초로 <b>압축</b>해드릴까요? 아니면 직접 줄이고 다시 재볼까요?`,
+      [{ act: "compress", label: "👌 압축해줘", primary: true },
+       { act: "revise", label: "✍️ 직접 고칠게요" },
+       { act: "confirm-anyway", label: "그냥 이대로 확정" }]));
   } else {
     gateShow(gateBubble(
-      `지금 대본은 약 <b>${m.total}초</b>로 좀 짧아요 (권장 ${m.min}~${m.max}초).<br><small>${gateScenes(m)}</small><br>제가 약 ${m.target}초로 <b>늘려</b>드릴까요?`,
-      [{ act: "expand", label: "👌 늘려줘", primary: true }, { act: "confirm-anyway", label: "그냥 이대로 확정" }]));
+      `지금 대본은 약 <b>${m.total}초</b>로 좀 짧아요 (권장 ${m.min}~${m.max}초).<br><small>${gateScenes(m)}</small><br>제가 약 ${m.target}초로 <b>늘려</b>드릴까요? 아니면 직접 더 쓰고 다시 재볼까요?`,
+      [{ act: "expand", label: "👌 늘려줘", primary: true },
+       { act: "revise", label: "✍️ 직접 고칠게요" },
+       { act: "confirm-anyway", label: "그냥 이대로 확정" }]));
   }
 }
 
@@ -1669,11 +1673,15 @@ async function gateAutofit(mode) {
       gateShow(gateBubble(`✨ 약 <b>${m.total}초</b>로 맞췄어요! 대본을 업데이트했어요. 이대로 확정할까요?`,
         [{ act: "confirm-now", label: "✅ 확정", primary: true }, { act: "close", label: "조금 더 볼게요" }]));
     } else if (m.verdict === "over") {
-      gateShow(gateBubble(`압축해도 약 <b>${m.total}초</b>라 한 화(${m.min}~${m.max}초)엔 좀 길어요.<br>두 화로 <b>나눠서</b> 1화만 쓸까요?`,
-        [{ act: "split", label: "✂️ 나눠줘", primary: true }, { act: "confirm-now", label: "그냥 이대로 확정" }]));
+      gateShow(gateBubble(`압축해도 약 <b>${m.total}초</b>라 한 화(${m.min}~${m.max}초)엔 여전히 길어요.<br>두 화로 <b>나눠서</b> 1화만 쓸까요? 아니면 직접 더 줄이고 다시 재볼까요?`,
+        [{ act: "split", label: "✂️ 나눠줘", primary: true },
+         { act: "revise", label: "✍️ 직접 고칠게요" },
+         { act: "confirm-now", label: "그냥 이대로 확정" }]));
     } else {
       gateShow(gateBubble(`조정 후 약 <b>${m.total}초</b>예요. 한 번 더 맞춰볼까요?`,
-        [{ act: "expand", label: "🔁 더 늘려줘", primary: true }, { act: "confirm-now", label: "✅ 이대로 확정" }]));
+        [{ act: "expand", label: "🔁 더 늘려줘", primary: true },
+         { act: "revise", label: "✍️ 직접 고칠게요" },
+         { act: "confirm-now", label: "✅ 이대로 확정" }]));
     }
   } catch (e) {
     gateShow(gateBubble("조정에 실패했어요 😢 다시 시도해줄래요?", [{ act: "close", label: "닫기" }]));
@@ -1684,6 +1692,14 @@ $("durationGateChat").addEventListener("click", (e) => {
   const b = e.target.closest(".gate-btn"); if (!b) return;
   const act = b.dataset.act;
   if (act === "close") return gateHide();
+  if (act === "revise") {
+    // 직접 수정 경로 — 확정하지 않고(잠금 X) 게이트만 닫는다. 대본은 이미 편집 가능 상태이므로
+    // 편집칸으로 스크롤해 바로 고치게 하고, 다 고치면 [확정]을 다시 눌러 재측정한다.
+    gateHide();
+    const ta = $("episodeDetailScript");
+    if (ta) ta.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
   if (act === "confirm-anyway" || act === "confirm-now") {
     setScriptConfirmed(true); gateHide(); renderEpisodeDetail(); return;
   }
