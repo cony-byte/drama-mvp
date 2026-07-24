@@ -476,14 +476,16 @@ async function pollJob(jobId) {
         const grew = stills.length !== _lastStillsLen;
         _lastStillsLen = stills.length;
         if (grew) {
-          _setStillsData(stills);   // 데이터는 항상 최신화(누적) — 나중에 씬 넘길 때 최신 반영
-          // ★사용자가 ◀/▶로 씬을 넘겨 보는 중이면(stillsFollow=false) 폴링이 화면을 다시 그리지
-          //   않는다 → 씬2 생성 중에도 보던 씬1에 그대로 머문다. 자동추적 중일 때만, 그리고 로딩/"+"
-          //   빈 상태일 때만 첫 렌더로 현재 씬을 채운다(이미 카드 보고 있으면 안 튐).
-          if (stillsFollow && !$("stillsList").querySelector(".still-media img")) renderStillsPage();
+          _setStillsData(stills);   // 데이터 갱신(누적) — 씬 넘길 때 최신 반영
+          // 이미 실제 카드를 보고 있으면 다시 그리지 않는다(새 컷 생겨도 안 튐). 로딩/"+" 빈 상태일
+          // 때만 첫 렌더로 현재 씬을 채운다. ★현재 stillsSceneIndex로만 그리므로 다른 씬으로 안 튄다.
+          //   이 렌더는 stillsFollow로 막지 않는다 — 막으면 생성 중 스틸이 화면에 아예 안 그려지고
+          //   완료 시 loadStudio(전체 재요청)만 기다리게 돼 느린 터널에서 "스틸이 안 나옴"이 됐었다.
+          if (!$("stillsList").querySelector(".still-media img")) renderStillsPage();
         }
       } else if (job.status !== "done" && stillsFollow) {
-        // 생성 초기(스틸 0개) 로딩 표시 — 단, 사용자가 다른 씬을 보고 있으면 그 화면을 안 덮는다.
+        // 생성 초기(스틸 0개) 로딩 표시 — 사용자가 ◀/▶로 다른 씬을 보는 중이면(stillsFollow=false)
+        // 그 화면을 "생성 중…"으로 덮지 않는다(보던 씬 유지). ★이 덮어쓰기가 씬 튐의 실제 원인이었다.
         renderStillsLoading(job.stage || "생성 중…");
       }
     } else if (job.status === "running") {
